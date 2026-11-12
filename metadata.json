@@ -1,0 +1,6 @@
+{
+  "name": "AetherVault Casino & Asset Hub",
+  "description": "Plataforma de gestión de activos digitales con tienda de 10 niveles de monedas, mejoras progresivas de habilidades de personaje, pasarela internacional con autenticación biométrica y suite de casino con Ruleta, Blackjack y Póker provably-fair con cifrado E2EE.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
