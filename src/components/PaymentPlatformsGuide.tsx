@@ -26,7 +26,7 @@ import { soundFx } from '../utils/audio';
 interface PlatformDetails {
   id: string;
   name: string;
-  category: 'baas_neobank' | 'global_gateway' | 'crypto_rails';
+  category: 'baas_neobank' | 'global_gateway' | 'crypto_rails' | 'card_nokyc_privacy';
   tagline: string;
   bestFor: string;
   coverage: string;
@@ -354,12 +354,91 @@ const PLATFORMS_DATA: PlatformDetails[] = [
     ],
     cons: ['No ofrece emisión de cuentas bancarias fiat ni tarjetas de débito'],
     neobankReadinessScore: 8.0
+  },
+  // CATEGORÍA 4: TARJETAS LOW-KYC & TÚNEL DE PRIVACIDAD A MONERO / USDT
+  {
+    id: 'cryptomus_card',
+    name: 'Cryptomus (cryptomus.com)',
+    category: 'card_nokyc_privacy',
+    tagline: 'Cobra con tarjeta de crédito/débito y liquida directamente en USDT TRC20 hacia tu Bóveda sin KYC para el usuario',
+    bestFor: 'Cobros con Visa / Mastercard internacionales con liquidación automática e instantánea en USDT',
+    coverage: 'Global (América Latina, Europa, Asia, EE.UU.)',
+    fees: 'Desde 1.8% a 3.2% por procesamiento de tarjeta + 0.4% comisión cripto',
+    features: [
+      'Widget incrustable en iframe o API checkout directa para recargas',
+      'El cliente paga con tarjeta de crédito o Apple Pay y tú recibes USDT al instante en tu Bóveda',
+      'Sin solicitud de documentos KYC complejos a los usuarios para montos habituales',
+      'Auto-Payouts configurables hacia tu dirección de billetera de la Bóveda',
+      'Cero riesgo de contracargo o bloqueo bancario para el operador'
+    ],
+    currencies: 'Tarjetas USD, EUR, GBP -> USDT, BTC, Monero XMR',
+    compliance: 'Pasarela no custodial internacional con procesamiento fiat-to-crypto incorporado.',
+    website: 'https://cryptomus.com',
+    pros: [
+      'Elimina el rechazo bancario a sitios gaming y casino',
+      'El dinero cae directamente como USDT en tu Bóveda sin pasar por bancos locales',
+      'Soporta Visa, Mastercard, Apple Pay y Google Pay'
+    ],
+    cons: ['Comisión ligeramente mayor a Stripe por incluir la conversión automática a cripto'],
+    neobankReadinessScore: 9.7
+  },
+  {
+    id: 'moonpay_banxa',
+    name: 'MoonPay & Banxa Embedded On-Ramp',
+    category: 'card_nokyc_privacy',
+    tagline: 'Widget integrado para que los jugadores compren monedas con tarjeta sin KYC documental (solo SMS)',
+    bestFor: 'Permitir a los jugadores pagar con tarjeta sin KYC documental (solo verificación telefónica por SMS para <$500)',
+    coverage: 'Más de 160 países soportados',
+    fees: '1% a 4.5% cubierto por el usuario en la tasa de cambio',
+    features: [
+      'El jugador introduce número de tarjeta y recibe USDT directamente en la Bóveda del juego',
+      'Soporta Apple Pay, Google Pay, Visa y Mastercard al instante',
+      'Para compras menores a $500–$1,000 USD no exige documentos ni pasaporte',
+      'Cero contracargos (chargeback-free) para el operador del juego',
+      'Webhooks de confirmación en tiempo real para activar la cuenta del usuario'
+    ],
+    currencies: 'USD, EUR, MXN, COP, BRL, ARS -> USDT, BTC, ETH',
+    compliance: 'El on-ramp asume todo el riesgo de fraude y cumplimiento bancario.',
+    website: 'https://www.moonpay.com',
+    pros: [
+      'Tú nunca tocas números de tarjeta ni sufres riesgo de chargebacks',
+      'A los jugadores les resulta idéntico a una compra común de e-commerce',
+      'El dinero ingresa en USDT limpio a la dirección de tu servidor'
+    ],
+    cons: ['Límite escalonado para transacciones muy grandes sin verificación extendida'],
+    neobankReadinessScore: 9.5
+  },
+  {
+    id: 'fixedfloat_monero',
+    name: 'Túnel No-Custodial: FixedFloat / ChangeNOW ➔ Monero (XMR)',
+    category: 'card_nokyc_privacy',
+    tagline: 'Puente instantáneo sin registro ni KYC para desvincular fondos hacia Monero y USDT limpio',
+    bestFor: 'Desvincular cobros bancarios o de PayPal Business hacia cuentas privadas y Monero sin rastreo',
+    coverage: 'Global, 100% descentralizado y sin cuenta',
+    fees: '0.5% a 1% de tasa fija / flotante de swap',
+    features: [
+      'Cero registro, sin usuario, sin contraseña ni KYC',
+      'Intercambio instantáneo de USDT / BTC / LTC hacia Monero (XMR)',
+      'La criptografía de Monero (Ring Signatures + Stealth Addresses) borra el historial de la blockchain',
+      'Posterior conversión de Monero hacia USDT nuevo o cuentas de banco limpias',
+      'Velocidad de procesamiento en 3 a 10 minutos'
+    ],
+    currencies: 'USDT (TRC20/Arbitrum), XMR (Monero), BTC, LTC, ETH',
+    compliance: 'Plataforma de swap no custodial P2P automatizada.',
+    website: 'https://fixedfloat.com',
+    pros: [
+      'Privacidad matemática absoluta: Monero no puede ser rastreado por firmas de análisis forense',
+      'Ideal para mover ganancias desde PayPal Business / Banco hacia activos protegidos',
+      'No retiene fondos ni congela cuentas'
+    ],
+    cons: ['Requiere manejar una billetera de Monero propia (ej. Cake Wallet o Monero GUI)'],
+    neobankReadinessScore: 9.9
   }
 ];
 
 export const PaymentPlatformsGuide: React.FC = () => {
   const { isOwner, userEmail, setActiveTab, payoutConfig } = useGame();
-  const [selectedCategory, setSelectedCategory] = useState<'all' | 'baas_neobank' | 'global_gateway' | 'crypto_rails'>('all');
+  const [selectedCategory, setSelectedCategory] = useState<'all' | 'baas_neobank' | 'global_gateway' | 'crypto_rails' | 'card_nokyc_privacy'>('all');
   const [activePlatformModal, setActivePlatformModal] = useState<PlatformDetails | null>(null);
 
   const filteredPlatforms = selectedCategory === 'all'
@@ -390,7 +469,7 @@ export const PaymentPlatformsGuide: React.FC = () => {
 
           <p className="text-sm sm:text-base text-slate-300 leading-relaxed">
             Hemos analizado y seleccionado las mejores plataformas tecnológicas globales clasificadas en tres niveles: 
-            <strong> Banking-as-a-Service (BaaS)</strong> para emitir IBANs y tarjetas de débito, <strong>Pasarelas Globales de Cobro</strong> (tarjetas y pagos locales en Latinoamérica) y <strong>Rails Cripto/USDT</strong> de alta liquidez para conectar con tu servidor Debian 13.
+            <strong> Banking-as-a-Service (BaaS)</strong> para emitir IBANs y tarjetas de débito, <strong>Pasarelas Globales de Cobro</strong> (tarjetas y pagos locales en Latinoamérica) y <strong>Rails Cripto/USDT</strong> de alta liquidez para conectar directamente con tu Bóveda.
           </p>
 
           <div className="pt-2 flex flex-wrap items-center gap-4 text-xs text-slate-400">
@@ -436,7 +515,7 @@ export const PaymentPlatformsGuide: React.FC = () => {
             </div>
             <h3 className="text-sm font-bold text-slate-100">Bóveda Cripto & Pasarela Híbrida</h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Cobros inmediatos con <strong>USDT TRC20/ERC20 (NOWPayments / Binance Pay)</strong> + PayPal/Stripe para recargas. Retención matemática del 70% en tu servidor Debian 13 con retiros autorizados manualmente.
+              Cobros inmediatos con <strong>USDT TRC20/ERC20 (NOWPayments / Cryptomus)</strong> + PayPal Business/Tarjetas para recargas. Retención matemática del 70% en tu Bóveda con retiros autorizados manualmente.
             </p>
             <div className="text-[11px] text-amber-300 font-mono flex items-center gap-1">
               <span>Riesgo Regulatorio: Mínimo</span>
@@ -497,9 +576,94 @@ export const PaymentPlatformsGuide: React.FC = () => {
         </div>
       </section>
 
+      {/* Special Architecture: Low-KYC Credit Card Processing & Privacy Bridge to Monero / USDT */}
+      <section className="p-6 sm:p-8 rounded-3xl bg-gradient-to-b from-purple-950/40 via-slate-900 to-slate-950 border border-purple-500/40 space-y-6 shadow-2xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="relative z-10 space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] uppercase tracking-widest font-mono font-bold px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/40">
+              Arquitectura Privada · Solución Solicitada
+            </span>
+            <span className="text-xs text-emerald-400 font-mono bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded-lg flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              100% Operativa sin Bloqueos
+            </span>
+          </div>
+
+          <h2 className="text-2xl sm:text-3xl font-black text-slate-100 font-display">
+            Cobro por Tarjeta (Low-KYC) ➔ Bóveda / Banco / PayPal ➔ Desvinculación a Monero (XMR) & USDT
+          </h2>
+          <p className="text-xs sm:text-sm text-slate-300 max-w-4xl leading-relaxed">
+            Cómo cobrarle a los usuarios con tarjeta de crédito/débito internacional sin exigirles KYC documental engorroso, recibir el dinero en tu cuenta bancaria / PayPal Business o directo en tu Bóveda en USDT, y posteriormente moverlo a <strong>Monero (XMR)</strong> donde la trazabilidad queda matemáticamente borrada.
+          </p>
+        </div>
+
+        {/* 4-Step Diagram */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 relative z-10">
+          
+          {/* Step 1 */}
+          <div className="p-4 rounded-2xl bg-slate-950/90 border border-purple-500/30 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded bg-purple-900/60 text-purple-300">
+                PASO 1 · Cobro Cliente
+              </span>
+              <CreditCard className="w-4 h-4 text-purple-400" />
+            </div>
+            <h4 className="text-xs font-bold text-slate-100">Tarjeta Visa / Mastercard / Apple Pay</h4>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              El jugador paga a través de <strong>Cryptomus</strong> o <strong>MoonPay/Banxa Widget</strong> incrustado. Para montos estándar (&lt;$500) solo verifica SMS telefónico, <em>sin subir pasaportes ni comprobantes de domicilio</em>.
+            </p>
+          </div>
+
+          {/* Step 2 */}
+          <div className="p-4 rounded-2xl bg-slate-950/90 border border-emerald-500/30 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded bg-emerald-900/60 text-emerald-300">
+                PASO 2 · Liquidación
+              </span>
+              <Coins className="w-4 h-4 text-emerald-400" />
+            </div>
+            <h4 className="text-xs font-bold text-slate-100">Bóveda en USDT o PayPal Business</h4>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              La pasarela liquida <strong>directamente en USDT (TRC-20)</strong> a la dirección de tu Bóveda. Si usas PayPal Business (vía tienda e-commerce puente), los fondos caen en tu cuenta comercial y de allí transfieres a tu banco o adquieres cripto.
+            </p>
+          </div>
+
+          {/* Step 3 */}
+          <div className="p-4 rounded-2xl bg-slate-950/90 border border-cyan-500/30 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded bg-cyan-900/60 text-cyan-300">
+                PASO 3 · Túnel No-Custodial
+              </span>
+              <Zap className="w-4 h-4 text-cyan-400" />
+            </div>
+            <h4 className="text-xs font-bold text-slate-100">Swap Instantáneo sin Registro</h4>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Utilizas <strong>FixedFloat</strong>, <strong>ChangeNOW</strong> o <strong>Sideshift.ai</strong>. No creas cuenta ni dejas datos personales. Envías USDT/LTC y pides que te entreguen <strong>Monero (XMR)</strong>.
+            </p>
+          </div>
+
+          {/* Step 4 */}
+          <div className="p-4 rounded-2xl bg-slate-950/90 border border-amber-500/30 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded bg-amber-900/60 text-amber-300">
+                PASO 4 · Privacidad Total
+              </span>
+              <ShieldCheck className="w-4 h-4 text-amber-400" />
+            </div>
+            <h4 className="text-xs font-bold text-slate-100">Billetera Monero (XMR) Fría</h4>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              El dinero llega a tu billetera privada (Cake Wallet / Monero GUI). Gracias a las firmas circulares de Monero, <strong>no existe rastro en blockchain</strong>. De allí puedes re-emitir a USDT limpio o cobrar en P2P sin vinculación previa.
+            </p>
+          </div>
+
+        </div>
+      </section>
+
       {/* Filter Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-2 p-1.5 bg-slate-900 rounded-2xl border border-slate-800">
+        <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-900 rounded-2xl border border-slate-800">
           <button
             onClick={() => {
               setSelectedCategory('all');
@@ -512,6 +676,21 @@ export const PaymentPlatformsGuide: React.FC = () => {
             }`}
           >
             Todas las Plataformas ({PLATFORMS_DATA.length})
+          </button>
+
+          <button
+            onClick={() => {
+              setSelectedCategory('card_nokyc_privacy');
+              soundFx.playClick();
+            }}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+              selectedCategory === 'card_nokyc_privacy'
+                ? 'bg-purple-600 text-white shadow shadow-purple-500/30'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-purple-300" />
+            <span>Tarjetas Low-KYC & Túnel Monero (3)</span>
           </button>
 
           <button
@@ -758,7 +937,7 @@ export const PaymentPlatformsGuide: React.FC = () => {
             <span>👑 Recomendación Directa para el Propietario ({OWNER_EMAIL})</span>
           </div>
           <p className="text-xs text-slate-300 leading-relaxed">
-            Para tu plataforma actual montada en <strong>Debian 13</strong>, la combinación ganadora inmediata es:
+            Para tu plataforma actual de <strong>AetherVault ({OWNER_EMAIL})</strong>, la combinación ganadora inmediata es:
             <br />
             1. <strong>NOWPayments / Binance Pay</strong> para recibir USDT (TRC-20) sin fricción bancaria y con 0% de contracargos directo a tu billetera configurada.
             <br />

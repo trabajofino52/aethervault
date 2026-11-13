@@ -7,7 +7,8 @@ import {
   Flame,
   MessageSquare,
   Sparkles,
-  Play
+  Play,
+  LifeBuoy
 } from 'lucide-react';
 import { soundFx } from '../utils/audio';
 
@@ -19,7 +20,8 @@ export const FloatingShortcutsDock: React.FC = () => {
     setIsChatWidgetOpen,
     isChatWidgetOpen,
     setActiveTab,
-    isHappyHourActiveForGame
+    isHappyHourActiveForGame,
+    setIsSupportPanelOpen
   } = useGame();
 
   const hh = isHappyHourActiveForGame('Roulette');
@@ -95,7 +97,20 @@ export const FloatingShortcutsDock: React.FC = () => {
         <span className="hidden sm:inline">Chat</span>
       </button>
 
-      {/* 6. Active Happy Hour Multiplier Badge */}
+      {/* 6. Soporte & Tickets */}
+      <button
+        onClick={() => {
+          setIsSupportPanelOpen(true);
+          soundFx.playClick();
+        }}
+        title="Soporte, Tickets, Contraseña y Pagos"
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-300 hover:text-amber-200 border border-slate-800 hover:border-amber-500/40 text-xs font-semibold whitespace-nowrap transition-transform active:scale-95"
+      >
+        <LifeBuoy className="w-3.5 h-3.5 text-amber-400" />
+        <span className="hidden sm:inline">Soporte</span>
+      </button>
+
+      {/* 7. Active Happy Hour Multiplier Badge */}
       {hh.active && (
         <div className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-500/20 border border-amber-500/50 text-amber-300 text-xs font-mono font-bold whitespace-nowrap animate-pulse">
           <Flame className="w-3.5 h-3.5 text-amber-400" />

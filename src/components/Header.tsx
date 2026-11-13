@@ -18,7 +18,8 @@ import {
   Share2,
   MessageSquare,
   DollarSign,
-  ArrowLeftRight
+  ArrowLeftRight,
+  LifeBuoy
 } from 'lucide-react';
 import { soundFx } from '../utils/audio';
 
@@ -42,7 +43,10 @@ export const Header: React.FC = () => {
     clearAllNotifications,
     userEmail,
     isOwner,
-    setIsAuthModalOpen
+    isDemoAccount,
+    resetDemoFunds,
+    setIsAuthModalOpen,
+    setIsSupportPanelOpen
   } = useGame();
 
   const [isNotifDropdownOpen, setIsNotifDropdownOpen] = useState(false);
@@ -217,6 +221,19 @@ export const Header: React.FC = () => {
             <MessageSquare className="w-4 h-4" />
           </button>
 
+          {/* Support, Password & Payment Resolution Panel trigger */}
+          <button
+            onClick={() => {
+              setIsSupportPanelOpen(true);
+              soundFx.playClick();
+            }}
+            title="Centro de Soporte, Modificar Contraseña y Resolución de Pagos"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-amber-300 bg-amber-950/30 border border-amber-600/50 rounded-lg hover:bg-amber-900/40 hover:border-amber-500 transition-colors whitespace-nowrap font-medium"
+          >
+            <LifeBuoy className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden sm:inline">Soporte</span>
+          </button>
+
           {/* Transaction History trigger */}
           <button
             onClick={() => {
@@ -235,17 +252,31 @@ export const Header: React.FC = () => {
               setIsAuthModalOpen(true);
               soundFx.playClick();
             }}
-            title={isOwner ? `Sesión de Propietario (${userEmail})` : `Sesión de Jugador (${userEmail})`}
+            title={isOwner ? `Sesión de Propietario (${userEmail})` : isDemoAccount ? `Cuenta Demo Aislada (${userEmail})` : `Sesión de Jugador (${userEmail})`}
             className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border transition-colors whitespace-nowrap ${
               isOwner
                 ? 'bg-amber-950/40 text-amber-300 border-amber-600/60 hover:bg-amber-900/40 font-bold'
+                : isDemoAccount
+                ? 'bg-purple-950/50 text-purple-300 border-purple-500/60 hover:bg-purple-900/40 font-bold'
                 : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
             }`}
           >
-            <User className="w-3.5 h-3.5 text-amber-400" />
+            <User className={`w-3.5 h-3.5 ${isDemoAccount ? 'text-purple-400' : 'text-amber-400'}`} />
             <span className="hidden sm:inline font-mono text-[11px] truncate max-w-[110px]">{userEmail.split('@')[0]}</span>
             {isOwner && <span className="text-[10px] text-amber-400">👑</span>}
+            {isDemoAccount && <span className="text-[10px] text-purple-300 font-bold">DEMO</span>}
           </button>
+
+          {/* Quick Demo Recharge button when logged in as gokudemo */}
+          {isDemoAccount && (
+            <button
+              onClick={resetDemoFunds}
+              title="Restablecer saldo a $5,000 USD (6,250 monedas) de prueba"
+              className="hidden md:flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-purple-900/60 hover:bg-purple-800 border border-purple-500/50 text-purple-200 text-xs font-bold transition-all shadow active:scale-95 whitespace-nowrap"
+            >
+              <span>🔄 $5,000 USD Demo</span>
+            </button>
+          )}
 
           {/* Sound Toggle */}
           <button

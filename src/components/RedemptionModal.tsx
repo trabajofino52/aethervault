@@ -17,10 +17,18 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
   isOpen,
   onClose
 }) => {
-  const { coins, requestPlayerRedemption, userEmail } = useGame();
+  const {
+    coins,
+    requestPlayerRedemption,
+    isDemoAccount,
+    isRealAccountActive,
+    setIsStoreOpen,
+    setIsAuthModalOpen,
+    setIsSupportPanelOpen
+  } = useGame();
 
   const [amountCoins, setAmountCoins] = useState<string>('100');
-  const [destType, setDestType] = useState<'crypto_usdt' | 'paypal' | 'bank_wire'>('crypto_usdt');
+  const [destType, setDestType] = useState<'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire'>('crypto_usdt');
   const [destAddress, setDestAddress] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
@@ -78,7 +86,83 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
           </button>
         </div>
 
-        {isSuccess ? (
+        {isDemoAccount ? (
+          <div className="py-8 text-center space-y-4">
+            <div className="w-16 h-16 mx-auto rounded-full bg-purple-950/90 border border-purple-500/60 flex items-center justify-center text-purple-300 shadow-xl">
+              <Lock className="w-8 h-8" />
+            </div>
+            <div className="space-y-1.5">
+              <h4 className="text-base font-bold text-purple-300 font-display">
+                Cuenta Demo Aislada ($5,000 USD Virtuales)
+              </h4>
+              <p className="text-xs text-slate-300 max-w-md mx-auto leading-relaxed">
+                El saldo de prueba de <strong>gokudemo</strong> ({coins.toLocaleString()} monedas = ${(coins * 0.8).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD) es exclusivo para verificar los 50 juegos y está estrictamente aislado de las cuentas con dinero real.
+              </p>
+            </div>
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-slate-400 text-left space-y-1">
+              <div className="font-bold text-amber-300">Política de Cuentas Reales:</div>
+              <p>Las cuentas reales son activadas únicamente tras la confirmación de depósitos en USDT (predeterminado), tarjeta o PayPal Business.</p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 justify-center pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  setIsAuthModalOpen(true);
+                  soundFx.playClick();
+                }}
+                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-black text-xs shadow transition"
+              >
+                Cambiar a Cuenta Real / Propietario
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs transition"
+              >
+                Seguir Probando Juegos
+              </button>
+            </div>
+          </div>
+        ) : !isRealAccountActive ? (
+          <div className="py-8 text-center space-y-4">
+            <div className="w-16 h-16 mx-auto rounded-full bg-amber-950/90 border border-amber-500/60 flex items-center justify-center text-amber-300 shadow-xl">
+              <AlertCircle className="w-8 h-8" />
+            </div>
+            <div className="space-y-1.5">
+              <h4 className="text-base font-bold text-amber-300 font-display">
+                Cuenta Real Pendiente de Confirmación de Depósito
+              </h4>
+              <p className="text-xs text-slate-300 max-w-md mx-auto leading-relaxed">
+                Para habilitar retiros en <strong>USDT (predeterminado)</strong>, Monero o banco, la cuenta debe activarse primero confirmando al menos un depósito en la Bóveda.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 justify-center pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  setIsStoreOpen(true);
+                  soundFx.playClick();
+                }}
+                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 text-slate-950 font-black text-xs shadow transition"
+              >
+                Realizar Depósito en Tienda
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  setIsSupportPanelOpen(true);
+                  soundFx.playClick();
+                }}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 font-bold text-xs border border-cyan-500/30 transition"
+              >
+                Verificar Pago por TXID (Soporte)
+              </button>
+            </div>
+          </div>
+        ) : isSuccess ? (
           <div className="py-8 text-center space-y-3">
             <div className="w-16 h-16 mx-auto rounded-full bg-emerald-950 border border-emerald-500 flex items-center justify-center text-emerald-400 shadow-xl animate-bounce">
               <CheckCircle2 className="w-8 h-8" />
@@ -145,30 +229,48 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
               </div>
             </div>
 
-            {/* Payment rail selector */}
+            {/* Payment rail selector: USDT default + Monero, BTC, PayPal, Wire */}
             <div>
-              <label className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">
-                Método de Recepción de Fondos
-              </label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block">
+                  Método de Recepción de Fondos
+                </label>
+                <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/30">
+                  USDT Predeterminado
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {(
                   [
-                    { id: 'crypto_usdt' as const, label: 'USDT (TRC20)' },
-                    { id: 'paypal' as const, label: 'PayPal' },
-                    { id: 'bank_wire' as const, label: 'Banco (IBAN)' }
+                    { id: 'crypto_usdt' as const, label: 'USDT (TRC-20)', badge: 'Predeterminado', isDefault: true },
+                    { id: 'crypto_monero' as const, label: 'Monero (XMR)', badge: 'Sin Rastreo', isDefault: false },
+                    { id: 'crypto_btc' as const, label: 'Bitcoin (BTC)', badge: 'Cripto', isDefault: false },
+                    { id: 'paypal' as const, label: 'PayPal Business', badge: 'Fiat', isDefault: false },
+                    { id: 'bank_wire' as const, label: 'Banco (IBAN/Wire)', badge: 'Directo', isDefault: false }
                   ] as const
                 ).map(m => (
                   <button
                     key={m.id}
                     type="button"
-                    onClick={() => setDestType(m.id)}
-                    className={`p-2 rounded-lg border text-xs font-semibold text-center transition-colors ${
+                    onClick={() => {
+                      setDestType(m.id);
+                      soundFx.playClick();
+                    }}
+                    className={`p-2 rounded-xl border text-left transition-all ${
                       destType === m.id
-                        ? 'bg-slate-800 border-amber-400 text-amber-300 font-bold'
-                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                        ? 'bg-emerald-950/70 border-emerald-400 text-emerald-300 font-bold shadow-md shadow-emerald-500/10'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
                     }`}
                   >
-                    {m.label}
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold">{m.label}</span>
+                      {m.isDefault && (
+                        <span className="text-[9px] font-mono text-emerald-400 bg-emerald-900/60 px-1 py-0.2 rounded">
+                          ★
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[9px] text-slate-500 block mt-0.5">{m.badge}</span>
                   </button>
                 ))}
               </div>
@@ -178,7 +280,11 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
             <div>
               <label className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">
                 {destType === 'crypto_usdt'
-                  ? 'Tu Dirección de Billetera USDT (TRC-20)'
+                  ? 'Tu Dirección de Billetera USDT (TRC-20 o ERC-20)'
+                  : destType === 'crypto_monero'
+                  ? 'Tu Dirección de Billetera Monero XMR (Total Privacidad)'
+                  : destType === 'crypto_btc'
+                  ? 'Tu Dirección Bitcoin (BTC o Lightning)'
                   : destType === 'paypal'
                   ? 'Tu Correo de Cuenta PayPal'
                   : 'Tu Código IBAN / Número de Cuenta Bancaria'}
@@ -191,8 +297,12 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
                 placeholder={
                   destType === 'crypto_usdt'
                     ? 'ej. TRX...'
+                    : destType === 'crypto_monero'
+                    ? 'ej. 888tNkSR77...'
+                    : destType === 'crypto_btc'
+                    ? 'ej. bc1q...'
                     : destType === 'paypal'
-                    ? 'ej. tu-email@paypal.com'
+                    ? 'ej. pagos@tu-cuenta.com'
                     : 'ej. ES76 2100...'
                 }
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 font-mono text-xs text-slate-200 focus:outline-none focus:border-amber-400"

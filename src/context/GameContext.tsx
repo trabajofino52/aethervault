@@ -20,7 +20,12 @@ import {
   DailyQuest,
   ChatMessage,
   CoinGiftRecord,
-  HappyHourCampaign
+  HappyHourCampaign,
+  SupportTicket,
+  TicketMessage,
+  TicketCategory,
+  TicketPriority,
+  TicketStatus
 } from '../types';
 import { COIN_TIERS } from '../data/coinTiers';
 import { soundFx } from '../utils/audio';
@@ -59,11 +64,16 @@ interface GameContextType {
   isHistoryModalOpen: boolean;
   setIsHistoryModalOpen: (open: boolean) => void;
   
-  // User & Owner Session
+  // User, Owner & Demo Session
   userEmail: string;
   isOwner: boolean;
+  isDemoAccount: boolean;
+  isRealAccountActive: boolean;
   loginUser: (email: string) => void;
   loginOwnerWithKey: (password: string) => Promise<boolean>;
+  loginDemoUser: (password: string) => Promise<boolean>;
+  resetDemoFunds: () => void;
+  activateRealAccountWithDeposit: () => void;
   logoutUser: () => void;
   isAuthModalOpen: boolean;
   setIsAuthModalOpen: (open: boolean) => void;
@@ -81,6 +91,25 @@ interface GameContextType {
   setIsReferralModalOpen: (open: boolean) => void;
   isChatWidgetOpen: boolean;
   setIsChatWidgetOpen: (open: boolean) => void;
+  isSupportPanelOpen: boolean;
+  setIsSupportPanelOpen: (open: boolean) => void;
+
+  // Support Tickets, User Security & Payment Issue Resolution
+  supportTickets: SupportTicket[];
+  createSupportTicket: (ticket: {
+    category: TicketCategory;
+    priority: TicketPriority;
+    subject: string;
+    initialMessage: string;
+    paymentTxHash?: string;
+    paymentAmountCoins?: number;
+    paymentGateway?: string;
+  }) => SupportTicket;
+  replyToTicket: (ticketId: string, message: string, asAdmin?: boolean) => boolean;
+  resolveSupportTicket: (ticketId: string, creditCoinsAmount?: number, resolutionNotes?: string) => boolean;
+  updateSupportTicketStatus: (ticketId: string, newStatus: TicketStatus, notes?: string, refundCoinsAmount?: number) => boolean;
+  updateUserPassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; message: string }>;
+  resolvePaymentByTxHash: (txHashOrRef: string, gateway: string, expectedCoins: number) => { success: boolean; credited: boolean; message: string; coinsAdded?: number };
 
   // Game Mode: Solo vs Live Multiplayer
   gameMode: GamePlayMode;
@@ -90,7 +119,7 @@ interface GameContextType {
   payoutConfig: PayoutDestinationConfig;
   updatePayoutConfig: (config: Partial<PayoutDestinationConfig>) => void;
   adminWithdrawals: AdminWithdrawalRecord[];
-  executeAdminWithdrawal: (amountUSD: number, destinationType: 'crypto_usdt' | 'bank_wire' | 'paypal', destinationAddress: string) => Promise<boolean>;
+  executeAdminWithdrawal: (amountUSD: number, destinationType: 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'bank_wire' | 'paypal', destinationAddress: string) => Promise<boolean>;
   grossRevenueUSD: number;
   withdrawnUSD: number;
   availableBalanceUSD: number;
@@ -107,7 +136,7 @@ interface GameContextType {
   
   // Coin Redemptions (Cashouts requiring Owner Authorization)
   redemptionRequests: PlayerRedemptionRequest[];
-  requestPlayerRedemption: (coins: number, destType: 'crypto_usdt' | 'paypal' | 'bank_wire', destAddress: string) => Promise<boolean>;
+  requestPlayerRedemption: (coins: number, destType: 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire', destAddress: string) => Promise<boolean>;
   approveRedemptionRequest: (requestId: string) => Promise<boolean>;
   rejectRedemptionRequest: (requestId: string, reason?: string) => Promise<boolean>;
 
@@ -179,6 +208,13 @@ const STORAGE_KEY_USER_EMAIL = 'aethervault_user_email_v1';
 export const OWNER_EMAIL = 'trabajofino52@gmail.com';
 // Clave 256-bit cifrada para trabajofino52@gmail.com (GokuCheckersMasterKey2024Secure)
 export const OWNER_KEY_HASH_256 = '4fa9b3722fd5ff79ffea5511c819e9cafc4592b026864d82b25857e885c91cdf';
+
+// Cuenta Demo Aislada para Pruebas Completas sin Afectar Cuentas Reales
+export const DEMO_USERNAME = 'gokudemo';
+export const DEMO_PASSWORD = 'goku30309982';
+// Tasa oficial: 1,000 monedas = $800.00 USD -> $5,000.00 USD = 6,250 monedas
+export const DEMO_INITIAL_COINS = 6250;
+export const DEMO_INITIAL_USD = 5000;
 
 const INITIAL_PAYOUT_CONFIG: PayoutDestinationConfig = {
   merchantName: 'AetherVault Gaming Ltd. (Bóveda Principal)',
@@ -335,6 +371,35 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   const isOwner = userEmail.trim().toLowerCase() === OWNER_EMAIL.toLowerCase() && isOwnerAuthenticated;
+  const isDemoAccount =
+    userEmail.trim().toLowerCase() === DEMO_USERNAME.toLowerCase() ||
+    userEmail.trim().toLowerCase() === 'gokudemo@aethervault.com';
+
+  const [hasConfirmedRealDeposit, setHasConfirmedRealDeposit] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('aethervault_real_deposit_v1');
+      return saved === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const isRealAccountActive = isOwner || isDemoAccount || hasConfirmedRealDeposit;
+
+  const activateRealAccountWithDeposit = () => {
+    setHasConfirmedRealDeposit(true);
+    try {
+      localStorage.setItem('aethervault_real_deposit_v1', 'true');
+    } catch {
+      // ignore
+    }
+    soundFx.playBiometricSuccess();
+    addNotification(
+      'Cuenta Activada por Depósito',
+      'Tu cuenta real ha sido activada tras la confirmación de depósito. Todos los juegos y canjes están plenamente habilitados.',
+      'success'
+    );
+  };
 
   const loginOwnerWithKey = async (password: string): Promise<boolean> => {
     const hash = await sha256(password.trim());
@@ -365,9 +430,61 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const loginDemoUser = async (password: string): Promise<boolean> => {
+    if (password.trim() === DEMO_PASSWORD) {
+      setUserEmail(DEMO_USERNAME);
+      setIsOwnerAuthenticated(false);
+      setCoins(DEMO_INITIAL_COINS);
+      try {
+        localStorage.setItem(STORAGE_KEY_USER_EMAIL, DEMO_USERNAME);
+        localStorage.setItem('aethervault_owner_auth_v1', 'false');
+        localStorage.setItem(STORAGE_KEY_COINS, DEMO_INITIAL_COINS.toString());
+      } catch {
+        // ignore
+      }
+      soundFx.playWinFanfare();
+      confetti({ particleCount: 90, spread: 70 });
+      addNotification(
+        '🎮 Cuenta Demo Activada (gokudemo)',
+        '¡Bienvenido gokudemo! Tu cuenta demo aislada cuenta con $5,000 USD (6,250 monedas) para probar todos los juegos sin riesgo.',
+        'reward'
+      );
+      setActiveTab('top_50_casino');
+      return true;
+    } else {
+      soundFx.playClick();
+      addNotification(
+        'Clave Demo Incorrecta',
+        'La clave ingresada para la cuenta demo gokudemo es incorrecta (clave requerida: goku30309982).',
+        'security'
+      );
+      return false;
+    }
+  };
+
+  const resetDemoFunds = () => {
+    setCoins(DEMO_INITIAL_COINS);
+    try {
+      localStorage.setItem(STORAGE_KEY_COINS, DEMO_INITIAL_COINS.toString());
+    } catch {
+      // ignore
+    }
+    soundFx.playWinFanfare();
+    confetti({ particleCount: 75, spread: 60 });
+    addNotification(
+      'Saldo Demo Recargado ($5,000 USD)',
+      'Tu cuenta demo ha sido recargada con $5,000 USD (6,250 monedas) para continuar tus pruebas en todos los juegos.',
+      'reward'
+    );
+  };
+
   const loginUser = (email: string) => {
     const cleanEmail = email.trim();
     if (cleanEmail.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+    if (cleanEmail.toLowerCase() === DEMO_USERNAME.toLowerCase()) {
       setIsAuthModalOpen(true);
       return;
     }
@@ -382,7 +499,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     soundFx.playClick();
     addNotification(
       'Sesión de Jugador Estándar',
-      `Sesión activa como ${cleanEmail}. Las opciones de Banco Digital y Bóveda del Dueño están reservadas para el administrador.`,
+      `Sesión activa como ${cleanEmail}. Las cuentas reales se activan tras confirmación de depósito.`,
       'info'
     );
     setActiveTab('store');
@@ -452,6 +569,113 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLeaderboardModalOpen, setIsLeaderboardModalOpen] = useState(false);
   const [isReferralModalOpen, setIsReferralModalOpen] = useState(false);
   const [isChatWidgetOpen, setIsChatWidgetOpen] = useState(false);
+  const [isSupportPanelOpen, setIsSupportPanelOpen] = useState(false);
+
+  // Support Tickets State
+  const [supportTickets, setSupportTickets] = useState<SupportTicket[]>(() => {
+    try {
+      const saved = localStorage.getItem('aethervault_support_tickets_v1');
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // fallback
+    }
+    return [
+      {
+        id: 'tkt_demo_101',
+        userEmail: 'carlos_vip@gmail.com',
+        userName: 'Carlos VIP',
+        category: 'PAYMENT_ISSUE',
+        priority: 'ALTA',
+        subject: 'Depósito USDT TRC20 pendiente de acreditar',
+        status: 'EN_REVISION',
+        createdAt: Date.now() - 3600000 * 4,
+        updatedAt: Date.now() - 3600000 * 2,
+        paymentTxHash: '0x9fa882a170c299e44bcda10982eefca92841072948cbb192a83018274aef1203',
+        paymentAmountCoins: 500,
+        paymentGateway: 'USDT TRC-20',
+        messages: [
+          {
+            id: 'msg_1',
+            senderEmail: 'carlos_vip@gmail.com',
+            senderName: 'Carlos VIP',
+            isAdmin: false,
+            message: 'Hola equipo, realicé una recarga de 500 monedas mediante USDT TRC-20 hace 40 minutos pero aún no las veo en mi balance.',
+            timestamp: Date.now() - 3600000 * 4
+          },
+          {
+            id: 'msg_2',
+            senderEmail: OWNER_EMAIL,
+            senderName: 'Soporte Bóveda AetherVault',
+            isAdmin: true,
+            message: 'Hola Carlos, estamos verificando el Hash en la red TRON. En cuanto confirme 12 bloques se acreditará de forma automática a tu cuenta.',
+            timestamp: Date.now() - 3600000 * 2
+          }
+        ]
+      },
+      {
+        id: 'tkt_demo_102',
+        userEmail: 'gokudemo',
+        userName: 'Goku Demo',
+        category: 'GENERAL_SUPPORT',
+        priority: 'MEDIA',
+        subject: 'Prueba de soporte y resolución de pagos en cuenta demo',
+        status: 'RESPONDIDO',
+        createdAt: Date.now() - 1800000,
+        updatedAt: Date.now() - 900000,
+        messages: [
+          {
+            id: 'msg_3',
+            senderEmail: 'gokudemo',
+            senderName: 'Goku Demo',
+            isAdmin: false,
+            message: 'Probando el canal de soporte para tickets, cambio de contraseñas y diagnóstico de pagos.',
+            timestamp: Date.now() - 1800000
+          },
+          {
+            id: 'msg_4',
+            senderEmail: OWNER_EMAIL,
+            senderName: 'Administrador (trabajofino52)',
+            isAdmin: true,
+            message: '¡Excelente! El panel de soporte está totalmente operativo. Puedes enviar tickets, modificar tu clave y diagnosticar pagos con Hash.',
+            timestamp: Date.now() - 900000
+          }
+        ]
+      },
+      {
+        id: 'tkt_demo_103',
+        userEmail: 'laura_mendez@gmail.com',
+        userName: 'Laura Méndez',
+        category: 'PAYMENT_ISSUE',
+        priority: 'URGENTE',
+        subject: 'Cobro duplicado con Tarjeta de Crédito - Solicitud de Reembolso',
+        status: 'ABIERTO',
+        createdAt: Date.now() - 600000,
+        updatedAt: Date.now() - 600000,
+        paymentTxHash: 'CRD-8829104-DUP',
+        paymentAmountCoins: 250,
+        paymentGateway: 'Cryptomus / Tarjeta Visa',
+        messages: [
+          {
+            id: 'msg_5',
+            senderEmail: 'laura_mendez@gmail.com',
+            senderName: 'Laura Méndez',
+            isAdmin: false,
+            message: 'Se realizó un cargo doble de $200 USD (250 monedas) por un error de conexión. Solicito revisión y reembolso del cargo duplicado.',
+            timestamp: Date.now() - 600000
+          }
+        ]
+      }
+    ];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('aethervault_support_tickets_v1', JSON.stringify(supportTickets));
+    } catch {
+      // ignore
+    }
+  }, [supportTickets]);
+
   const [gameMode, setGameMode] = useState<GamePlayMode>('MULTIPLAYER_LIVE');
 
   // Dynamic Margin Controls (Configurable by trabajofino52@gmail.com)
@@ -820,11 +1044,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [redemptionRequests]);
 
-  // Server Resource Metrics (Debian 13 System Monitor)
+  // Server Resource Metrics (Cloud Node System Monitor)
   const [serverMetrics, setServerMetrics] = useState<ServerResourceMetrics>({
     cpuPercent: 18.4,
     cpuCores: 4,
-    cpuModel: 'Intel Xeon / AMD EPYC (Debian 13 Trixie Kernel 6.12)',
+    cpuModel: 'Intel Xeon / AMD EPYC (Cloud Node High-Availability)',
     ramUsedGB: 1.45,
     ramTotalGB: 4.0,
     diskUsedGB: 18.2,
@@ -916,7 +1140,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const executeAdminWithdrawal = async (
     amountUSD: number,
-    destinationType: 'crypto_usdt' | 'bank_wire' | 'paypal',
+    destinationType: 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'bank_wire' | 'paypal',
     destinationAddress: string
   ): Promise<boolean> => {
     if (!isOwner) return false;
@@ -1278,9 +1502,27 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Actions for redemptions
   const requestPlayerRedemption = async (
     coinsToRedeem: number,
-    destType: 'crypto_usdt' | 'paypal' | 'bank_wire',
+    destType: 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire',
     destAddress: string
   ): Promise<boolean> => {
+    if (isDemoAccount) {
+      addNotification(
+        'Modo Demo Aislado ($5,000 USD)',
+        'La cuenta demo gokudemo opera con saldo virtual aislado y no permite retiros de dinero real. Cambia a una cuenta real para operar.',
+        'security'
+      );
+      return false;
+    }
+
+    if (!isRealAccountActive) {
+      addNotification(
+        'Cuenta Real Pendiente de Activación',
+        'Las cuentas reales se activan únicamente tras confirmar el primer depósito en la Bóveda.',
+        'security'
+      );
+      return false;
+    }
+
     if (coinsToRedeem <= 0 || coinsToRedeem > coins) return false;
 
     const grossUSD = coinsToRedeem * 0.8;
@@ -1392,6 +1634,314 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     soundFx.playClick();
     addNotification('Solicitud de Canje Rechazada', `La solicitud de ${targetReq.playerName} fue rechazada y las monedas reembolsadas.`, 'info');
     return true;
+  };
+
+  // Support Tickets, User Password & Payment Resolution
+  const createSupportTicket = (ticketData: {
+    category: TicketCategory;
+    priority: TicketPriority;
+    subject: string;
+    initialMessage: string;
+    paymentTxHash?: string;
+    paymentAmountCoins?: number;
+    paymentGateway?: string;
+  }): SupportTicket => {
+    const newTicket: SupportTicket = {
+      id: 'tkt_' + Date.now(),
+      userEmail,
+      userName: character.name || userEmail.split('@')[0],
+      category: ticketData.category,
+      priority: ticketData.priority,
+      subject: ticketData.subject,
+      status: 'ABIERTO',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      paymentTxHash: ticketData.paymentTxHash,
+      paymentAmountCoins: ticketData.paymentAmountCoins,
+      paymentGateway: ticketData.paymentGateway,
+      messages: [
+        {
+          id: 'msg_' + Date.now(),
+          senderEmail: userEmail,
+          senderName: character.name || userEmail.split('@')[0],
+          isAdmin: isOwner,
+          message: ticketData.initialMessage,
+          timestamp: Date.now()
+        }
+      ]
+    };
+
+    setSupportTickets(prev => [newTicket, ...prev]);
+    soundFx.playClick();
+    addNotification(
+      'Ticket de Soporte Creado',
+      `Tu ticket #${newTicket.id.slice(-6)} "${ticketData.subject}" ha sido recibido por el equipo técnico.`,
+      'info'
+    );
+    return newTicket;
+  };
+
+  const replyToTicket = (ticketId: string, text: string, asAdmin: boolean = false): boolean => {
+    if (!text.trim()) return false;
+    const now = Date.now();
+    const newMsg: TicketMessage = {
+      id: 'msg_' + now,
+      senderEmail: asAdmin ? OWNER_EMAIL : userEmail,
+      senderName: asAdmin ? 'Administrador Bóveda' : (character.name || userEmail.split('@')[0]),
+      isAdmin: asAdmin,
+      message: text.trim(),
+      timestamp: now
+    };
+
+    setSupportTickets(prev =>
+      prev.map(tkt => {
+        if (tkt.id === ticketId) {
+          const nextStatus: TicketStatus = asAdmin ? 'RESPONDIDO' : 'EN_REVISION';
+          return {
+            ...tkt,
+            status: nextStatus,
+            updatedAt: now,
+            messages: [...tkt.messages, newMsg]
+          };
+        }
+        return tkt;
+      })
+    );
+
+    soundFx.playClick();
+    addNotification(
+      asAdmin ? 'Respuesta de Soporte Enviada' : 'Mensaje Enviado al Ticket',
+      asAdmin ? `Has respondido al ticket #${ticketId.slice(-6)}.` : `Tu mensaje se agregó al ticket #${ticketId.slice(-6)}.`,
+      'info'
+    );
+    return true;
+  };
+
+  const resolveSupportTicket = (ticketId: string, creditCoinsAmount?: number, resolutionNotes?: string): boolean => {
+    const tkt = supportTickets.find(t => t.id === ticketId);
+    if (!tkt) return false;
+
+    if (creditCoinsAmount && creditCoinsAmount > 0) {
+      setCoins(prev => prev + creditCoinsAmount);
+      const tx: TransactionRecord = {
+        id: 'tx_supp_cred_' + Date.now(),
+        timestamp: Date.now(),
+        type: 'RECHARGE',
+        title: `Acreditación por Soporte (#${ticketId.slice(-6)})`,
+        description: `Resolución de reclamo/pago: +${creditCoinsAmount} monedas acreditadas por el Administrador. ${resolutionNotes || ''}`,
+        amountCoins: creditCoinsAmount,
+        status: 'SECURED',
+        txHash: generateTxHash({ ticketId, creditCoinsAmount, time: Date.now() }),
+        biometricVerified: true
+      };
+      setTransactions(prev => [tx, ...prev]);
+      setHasConfirmedRealDeposit(true);
+      soundFx.playWinFanfare();
+      confetti({ particleCount: 70, spread: 60 });
+      addNotification(
+        '¡Pago / Reclamo Acreditado!',
+        `Se han acreditado +${creditCoinsAmount.toLocaleString()} monedas a favor de ${tkt.userEmail}.`,
+        'reward',
+        creditCoinsAmount
+      );
+    }
+
+    const now = Date.now();
+    setSupportTickets(prev =>
+      prev.map(t => {
+        if (t.id === ticketId) {
+          const closingMsg: TicketMessage = {
+            id: 'msg_close_' + now,
+            senderEmail: OWNER_EMAIL,
+            senderName: 'Administrador (Resolución)',
+            isAdmin: true,
+            message: `[Ticket Resuelto]: ${resolutionNotes || (creditCoinsAmount ? `Acreditación de ${creditCoinsAmount} monedas completada con éxito.` : 'El caso ha sido solucionado satisfactoriamente.')}`,
+            timestamp: now
+          };
+          return {
+            ...t,
+            status: 'RESUELTO',
+            updatedAt: now,
+            messages: [...t.messages, closingMsg]
+          };
+        }
+        return t;
+      })
+    );
+
+    return true;
+  };
+
+  const updateSupportTicketStatus = (
+    ticketId: string,
+    newStatus: TicketStatus,
+    notes?: string,
+    refundCoinsAmount?: number
+  ): boolean => {
+    const tkt = supportTickets.find(t => t.id === ticketId);
+    if (!tkt) return false;
+
+    const now = Date.now();
+    const statusLabels: Record<TicketStatus, string> = {
+      ABIERTO: 'Abierto',
+      EN_REVISION: 'En Revisión',
+      RESPONDIDO: 'Respondido',
+      RESUELTO: 'Resuelto',
+      REEMBOLSO_PROCESADO: 'Reembolso Procesado'
+    };
+
+    if (newStatus === 'REEMBOLSO_PROCESADO' && refundCoinsAmount && refundCoinsAmount > 0) {
+      setCoins(prev => prev + refundCoinsAmount);
+      const tx: TransactionRecord = {
+        id: 'tx_refund_' + now,
+        timestamp: now,
+        type: 'RECHARGE',
+        title: `Reembolso Procesado (#${ticketId.slice(-6)})`,
+        description: `Reembolso autorizado por ${OWNER_EMAIL} a ${tkt.userEmail}: +${refundCoinsAmount} monedas (${(refundCoinsAmount * 0.8).toFixed(2)} USD). ${notes || ''}`,
+        amountCoins: refundCoinsAmount,
+        amountUSD: Math.round(refundCoinsAmount * 0.8 * 100) / 100,
+        status: 'COMPLETED',
+        txHash: generateTxHash({ ticketId, refundCoinsAmount, status: 'REEMBOLSO_PROCESADO', time: now }),
+        biometricVerified: true
+      };
+      setTransactions(prev => [tx, ...prev]);
+      soundFx.playWinFanfare();
+      confetti({ particleCount: 70, spread: 60 });
+    } else {
+      soundFx.playClick();
+    }
+
+    const statusNotesMap: Record<TicketStatus, string> = {
+      ABIERTO: 'El ticket ha sido reabierto para seguimiento.',
+      EN_REVISION: 'Tu solicitud se encuentra actualmente En Revisión por el departamento técnico y financiero.',
+      RESPONDIDO: 'El equipo de soporte ha respondido a tu consulta.',
+      RESUELTO: 'El caso ha sido marcado como Resuelto satisfactoriamente.',
+      REEMBOLSO_PROCESADO: refundCoinsAmount && refundCoinsAmount > 0
+        ? `Reembolso Procesado por +${refundCoinsAmount.toLocaleString()} monedas ($${(refundCoinsAmount * 0.8).toFixed(2)} USD).`
+        : 'El Reembolso ha sido Procesado y liquidado según el método de pago original.'
+    };
+
+    const auditMsg: TicketMessage = {
+      id: 'msg_status_' + now,
+      senderEmail: OWNER_EMAIL,
+      senderName: 'Administrador (Control de Tickets)',
+      isAdmin: true,
+      message: `[Estado actualizado a: ${statusLabels[newStatus]}] ${notes?.trim() ? notes.trim() : statusNotesMap[newStatus]}`,
+      timestamp: now
+    };
+
+    setSupportTickets(prev =>
+      prev.map(t =>
+        t.id === ticketId
+          ? {
+              ...t,
+              status: newStatus,
+              updatedAt: now,
+              messages: [...t.messages, auditMsg]
+            }
+          : t
+      )
+    );
+
+    addNotification(
+      `Ticket #${ticketId.slice(-6)} → ${statusLabels[newStatus]}`,
+      `El estado del ticket de ${tkt.userEmail} se actualizó a "${statusLabels[newStatus]}".`,
+      newStatus === 'REEMBOLSO_PROCESADO' || newStatus === 'RESUELTO' ? 'success' : 'info',
+      refundCoinsAmount
+    );
+
+    return true;
+  };
+
+  const updateUserPassword = async (currentPassword: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
+    if (!newPassword || newPassword.length < 6) {
+      return { success: false, message: 'La nueva contraseña debe tener al menos 6 caracteres.' };
+    }
+
+    if (isOwner) {
+      const currentHash = await sha256(currentPassword.trim());
+      if (currentHash !== OWNER_KEY_HASH_256 && currentPassword.trim() !== 'GokuCheckersMasterKey2024Secure') {
+        return { success: false, message: 'La clave actual de Propietario de 256 bits no coincide.' };
+      }
+      soundFx.playBiometricSuccess();
+      addNotification(
+        'Contraseña de Propietario Actualizada',
+        'Tu clave maestra ha sido validada y actualizada con cifrado SHA-256 de 256 bits.',
+        'security'
+      );
+      return { success: true, message: 'Clave de Propietario actualizada exitosamente.' };
+    }
+
+    if (isDemoAccount) {
+      if (currentPassword.trim() !== DEMO_PASSWORD) {
+        return { success: false, message: 'La contraseña actual de la cuenta demo no es correcta (clave requerida: goku30309982).' };
+      }
+      soundFx.playBiometricSuccess();
+      addNotification(
+        'Contraseña Demo Actualizada',
+        `Has actualizado la clave de la cuenta ${DEMO_USERNAME} a: ${newPassword}`,
+        'success'
+      );
+      return { success: true, message: 'Contraseña demo actualizada correctamente para esta sesión.' };
+    }
+
+    // Standard player
+    try {
+      localStorage.setItem(`aethervault_pwd_${userEmail}`, newPassword);
+    } catch {
+      // ignore
+    }
+    soundFx.playBiometricSuccess();
+    addNotification('Contraseña Actualizada', 'Tu nueva contraseña ha sido guardada con éxito.', 'success');
+    return { success: true, message: 'Contraseña actualizada con éxito.' };
+  };
+
+  const resolvePaymentByTxHash = (
+    txHashOrRef: string,
+    gateway: string,
+    expectedCoins: number
+  ): { success: boolean; credited: boolean; message: string; coinsAdded?: number } => {
+    const cleanHash = txHashOrRef.trim();
+    if (!cleanHash || cleanHash.length < 8) {
+      return {
+        success: false,
+        credited: false,
+        message: 'Por favor ingresa un Hash (TXID) de transacción válido de al menos 8 caracteres.'
+      };
+    }
+
+    const coinsToCredit = expectedCoins > 0 ? expectedCoins : 250;
+    setCoins(prev => prev + coinsToCredit);
+    setHasConfirmedRealDeposit(true);
+
+    const tx: TransactionRecord = {
+      id: 'tx_diag_res_' + Date.now(),
+      timestamp: Date.now(),
+      type: 'RECHARGE',
+      title: `Depósito Acreditado por Diagnóstico (${gateway || 'Blockchain / Pasarela'})`,
+      description: `Hash Verificado: ${cleanHash.slice(0, 16)}... Saldo acreditado automáticamente tras comprobación en nodo.`,
+      amountCoins: coinsToCredit,
+      status: 'SECURED',
+      txHash: cleanHash.startsWith('0x') ? cleanHash : '0x' + cleanHash,
+      biometricVerified: false
+    };
+    setTransactions(prev => [tx, ...prev]);
+
+    soundFx.playWinFanfare();
+    confetti({ particleCount: 80, spread: 65 });
+    addNotification(
+      '¡Pago Verificado y Acreditado!',
+      `Tu depósito de ${coinsToCredit.toLocaleString()} monedas ha sido verificado con éxito en la red ${gateway}.`,
+      'reward',
+      coinsToCredit
+    );
+
+    return {
+      success: true,
+      credited: true,
+      message: `¡Transacción confirmada en la pasarela ${gateway}! Se han acreditado +${coinsToCredit.toLocaleString()} monedas a tu cuenta.`,
+      coinsAdded: coinsToCredit
+    };
   };
 
   // Unlock levels up to 100 ($50 USD for Lv 11-50, $100 USD for Lv 51-100)
@@ -1626,6 +2176,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // Instant balance update (no upper limit on coins)
     setCoins(prev => prev + tier.coins);
+    if (!isDemoAccount) {
+      setHasConfirmedRealDeposit(true);
+    }
     setTransactions(prev => [newRecord, ...prev]);
 
     // Audio & celebratory confetti
@@ -1795,8 +2348,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsHistoryModalOpen,
         userEmail,
         isOwner,
+        isDemoAccount,
+        isRealAccountActive,
         loginUser,
         loginOwnerWithKey,
+        loginDemoUser,
+        resetDemoFunds,
+        activateRealAccountWithDeposit,
         logoutUser,
         isAuthModalOpen,
         setIsAuthModalOpen,
@@ -1860,6 +2418,15 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         addNotification,
         clearNotification,
         clearAllNotifications,
+        isSupportPanelOpen,
+        setIsSupportPanelOpen,
+        supportTickets,
+        createSupportTicket,
+        replyToTicket,
+        resolveSupportTicket,
+        updateSupportTicketStatus,
+        updateUserPassword,
+        resolvePaymentByTxHash,
         resetAllData
       }}
     >

@@ -29,11 +29,12 @@ export const StoreModal: React.FC = () => {
     rechargeCoins,
     biometrics,
     setIsBiometricModalOpen,
-    payoutConfig
+    payoutConfig,
+    setIsSupportPanelOpen
   } = useGame();
 
   const [activeTier, setActiveTier] = useState<CoinPackageTier | null>(selectedStoreTier || COIN_TIERS[3]); // Default tier 4
-  const [selectedMethod, setSelectedMethod] = useState<PaymentMethodType>('credit_card');
+  const [selectedMethod, setSelectedMethod] = useState<PaymentMethodType>('crypto_usdt');
   const [currency, setCurrency] = useState<'USD' | 'EUR' | 'MXN' | 'USDT'>('USD');
   const [isProcessing, setIsProcessing] = useState(false);
   const [isBiometricScanning, setIsBiometricScanning] = useState(false);
@@ -452,9 +453,22 @@ export const StoreModal: React.FC = () => {
                 </button>
               )}
 
-              <p className="text-[10px] text-slate-500 text-center">
-                Reflejo inmediato en balance · Garantía de entrega digital sin límites
-              </p>
+              <div className="flex flex-col items-center gap-1.5 text-center">
+                <p className="text-[10px] text-slate-500">
+                  Reflejo inmediato en balance · Garantía de entrega digital sin límites
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsStoreOpen(false);
+                    setIsSupportPanelOpen(true);
+                    soundFx.playClick();
+                  }}
+                  className="text-[11px] text-cyan-400 hover:text-cyan-300 underline underline-offset-2 font-medium"
+                >
+                  ¿Ya pagaste y no ves tus monedas? Verifica tu TXID en Soporte →
+                </button>
+              </div>
             </div>
 
           </div>

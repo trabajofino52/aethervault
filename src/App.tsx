@@ -28,6 +28,7 @@ import { MultiplayerChatWidget } from './components/MultiplayerChatWidget';
 import { PaymentPlatformsGuide } from './components/PaymentPlatformsGuide';
 import { Top50CasinoHub } from './components/Top50CasinoHub';
 import { FloatingShortcutsDock } from './components/FloatingShortcutsDock';
+import { UserSupportPanel } from './components/UserSupportPanel';
 import { COIN_TIERS } from './data/coinTiers';
 import {
   Coins,
@@ -683,7 +684,44 @@ const GlobalModalsContainer: React.FC = () => {
       <LeaderboardTournamentModal />
       <ReferralModal />
       <MultiplayerChatWidget />
+      <UserSupportPanel />
     </>
+  );
+};
+
+const DemoAccountTopBanner: React.FC = () => {
+  const { isDemoAccount, resetDemoFunds, coins, setActiveTab } = useGame();
+  if (!isDemoAccount) return null;
+
+  return (
+    <div className="bg-gradient-to-r from-purple-950/90 via-slate-900 to-indigo-950/90 border-b border-purple-500/40 px-4 py-2 text-xs">
+      <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-center sm:text-left">
+        <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+          <span className="px-2.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[10px] font-bold uppercase tracking-wider font-mono flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping" />
+            🎮 Cuenta Demo Aislada (gokudemo)
+          </span>
+          <span className="text-slate-300">
+            Saldo de pruebas: <strong className="text-amber-300 font-mono-numbers">{coins.toLocaleString()} monedas</strong> (${(coins * 0.8).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD). Aislada de las cuentas reales (las cuentas reales se activan tras confirmación de depósito).
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={resetDemoFunds}
+            className="px-3 py-1 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 text-white font-bold text-xs shadow active:scale-95 transition-all"
+          >
+            🔄 Recargar $5,000 USD Demo
+          </button>
+          <button
+            onClick={() => setActiveTab('top_50_casino')}
+            className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs border border-slate-700 transition-colors"
+          >
+            🎰 Top 50 Casino
+          </button>
+        </div>
+      </div>
+    </div>
   );
 };
 
@@ -700,6 +738,9 @@ export default function App() {
 
         {/* Real-Time Live Winning Marquee Ticker */}
         <LiveWinningTicker />
+
+        {/* Demo Account Indicator Banner */}
+        <DemoAccountTopBanner />
 
         {/* Main View Area */}
         <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6">

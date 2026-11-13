@@ -37,10 +37,14 @@ import {
   MinusCircle,
   Send,
   Zap,
-  Award
+  Award,
+  LifeBuoy,
+  MessageSquare,
+  Search,
+  RotateCcw
 } from 'lucide-react';
 import { soundFx } from '../utils/audio';
-import { CoinGiftRecord, HappyHourGameSection, HappyHourTargetGroup } from '../types';
+import { CoinGiftRecord, HappyHourGameSection, HappyHourTargetGroup, TicketStatus } from '../types';
 
 export const AdminPanel: React.FC = () => {
   const {
@@ -76,12 +80,24 @@ export const AdminPanel: React.FC = () => {
     adminAdjustUserCoins,
     happyHourCampaign,
     updateHappyHourCampaign,
-    toggleHappyHour
+    toggleHappyHour,
+    supportTickets,
+    replyToTicket,
+    resolveSupportTicket,
+    updateSupportTicketStatus
   } = useGame();
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'currency_control' | 'happy_hour' | 'redemptions' | 'vault_split' | 'server_telemetry' | 'destinations' | 'withdraw' | 'audit'
+    'overview' | 'currency_control' | 'happy_hour' | 'redemptions' | 'support_tickets' | 'vault_split' | 'server_telemetry' | 'destinations' | 'withdraw' | 'audit'
   >('redemptions');
+
+  // Support Tickets Admin State
+  const [selectedAdminTicketId, setSelectedAdminTicketId] = useState<string | null>(null);
+  const [ticketStatusFilter, setTicketStatusFilter] = useState<'ALL' | TicketStatus>('ALL');
+  const [ticketSearchQuery, setTicketSearchQuery] = useState<string>('');
+  const [adminReplyText, setAdminReplyText] = useState<string>('');
+  const [creditCoinsInput, setCreditCoinsInput] = useState<string>('0');
+  const [resolutionNotesInput, setResolutionNotesInput] = useState<string>('');
 
   // Currency Administration & Airdrops Local State
   const [giftTargetType, setGiftTargetType] = useState<CoinGiftRecord['targetType']>('ALL_PLAYERS');
@@ -123,6 +139,7 @@ export const AdminPanel: React.FC = () => {
   const [isProcessingWd, setIsProcessingWd] = useState(false);
 
   const pendingRedemptionsCount = redemptionRequests.filter(r => r.status === 'PENDING_APPROVAL').length;
+  const openTicketsCount = supportTickets.filter(t => t.status !== 'RESUELTO' && t.status !== 'REEMBOLSO_PROCESADO').length;
 
   const handleSendGift = async () => {
     if (giftAmount <= 0) return;
@@ -327,7 +344,7 @@ export const AdminPanel: React.FC = () => {
               Bóveda de Recaudación, Retiros & Control de Servidor
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
-              Gestión centralizada de fondos: autorización exclusiva de canjes de jugadores con 20% de comisión automática retenida para la bóveda, reserva 70/30 de apuestas y telemetría de Debian 13.
+              Gestión centralizada de fondos: autorización exclusiva de canjes de jugadores con 20% de comisión automática retenida para la bóveda, reserva 70/30 de apuestas y telemetría de servidor en vivo.
             </p>
           </div>
 
@@ -424,8 +441,9 @@ export const AdminPanel: React.FC = () => {
             { id: 'currency_control' as const, label: 'Monedas & Regalos / Airdrops', icon: Gift },
             { id: 'happy_hour' as const, label: 'Horas Locas & Multiplicadores', icon: Flame, isLive: happyHourCampaign.isActive },
             { id: 'redemptions' as const, label: 'Autorización de Canjes', badge: pendingRedemptionsCount },
+            { id: 'support_tickets' as const, label: 'Tablero de Tickets de Soporte', icon: LifeBuoy, badge: openTicketsCount },
             { id: 'vault_split' as const, label: 'Economía 70% Bóveda / 30% Premios' },
-            { id: 'server_telemetry' as const, label: 'Telemetría Servidor Debian 13 & Jugadores' },
+            { id: 'server_telemetry' as const, label: 'Telemetría del Servidor & Jugadores' },
             { id: 'destinations' as const, label: 'Configurar Bóvedas de Cobro' },
             { id: 'withdraw' as const, label: 'Retirar Fondos a Billetera' },
             { id: 'audit' as const, label: 'Libro Contable' },
@@ -1482,16 +1500,16 @@ export const AdminPanel: React.FC = () => {
               <div>
                 <h2 className="text-xl font-bold text-slate-100 font-display flex items-center gap-2">
                   <Server className="w-5 h-5 text-emerald-400" />
-                  Monitor del Servidor Debian 13 (Trixie) & Jugadores
+                  Monitor del Servidor en Vivo & Jugadores
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
-                  Recursos en tiempo real del VPS Linux dedicado ejecutando NGINX, Node.js y WebSocket Daemon
+                  Recursos en tiempo real del nodo de alta disponibilidad ejecutando NGINX, Node.js y WebSocket Daemon
                 </p>
               </div>
               <div className="flex items-center gap-2">
                 <span className="flex items-center gap-1.5 text-xs font-mono px-3 py-1.5 rounded-xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-400">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  Debian 13 Kernel 6.12 OK
+                  Servidor Cloud E2EE OK
                 </span>
               </div>
             </div>
@@ -2001,6 +2019,511 @@ export const AdminPanel: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* TAB: SUPPORT TICKETS CONTROL DASHBOARD */}
+      {activeTab === 'support_tickets' && (() => {
+        const countByStatus = {
+          ABIERTO: supportTickets.filter(t => t.status === 'ABIERTO').length,
+          EN_REVISION: supportTickets.filter(t => t.status === 'EN_REVISION').length,
+          RESPONDIDO: supportTickets.filter(t => t.status === 'RESPONDIDO').length,
+          RESUELTO: supportTickets.filter(t => t.status === 'RESUELTO').length,
+          REEMBOLSO_PROCESADO: supportTickets.filter(t => t.status === 'REEMBOLSO_PROCESADO').length
+        };
+
+        const statusBadgeMap: Record<TicketStatus, { label: string; className: string }> = {
+          ABIERTO: { label: 'Abierto', className: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
+          EN_REVISION: { label: 'En Revisión', className: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' },
+          RESPONDIDO: { label: 'Respondido', className: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
+          RESUELTO: { label: 'Resuelto', className: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' },
+          REEMBOLSO_PROCESADO: { label: 'Reembolso Procesado', className: 'bg-purple-500/20 text-purple-300 border-purple-500/40' }
+        };
+
+        const filteredTickets = supportTickets.filter(t => {
+          const matchesFilter = ticketStatusFilter === 'ALL' || t.status === ticketStatusFilter;
+          const q = ticketSearchQuery.trim().toLowerCase();
+          const matchesSearch =
+            !q ||
+            t.id.toLowerCase().includes(q) ||
+            t.userEmail.toLowerCase().includes(q) ||
+            t.userName.toLowerCase().includes(q) ||
+            t.subject.toLowerCase().includes(q) ||
+            (t.paymentTxHash && t.paymentTxHash.toLowerCase().includes(q));
+          return matchesFilter && matchesSearch;
+        });
+
+        const activeTicket =
+          filteredTickets.find(t => t.id === selectedAdminTicketId) ||
+          supportTickets.find(t => t.id === selectedAdminTicketId) ||
+          (filteredTickets.length > 0 ? filteredTickets[0] : null);
+
+        return (
+          <div className="space-y-6 animate-in fade-in duration-300">
+            {/* Header & KPI Metrics Strip */}
+            <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-5">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-100 font-display flex items-center gap-2">
+                    <LifeBuoy className="w-5 h-5 text-amber-400" />
+                    Tablero de Control Administrativo: Tickets de Soporte
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Supervisa todos los tickets recibidos, audita reclamos de pagos y actualiza estados a <strong>En Revisión</strong>, <strong>Resuelto</strong> o <strong>Reembolso Procesado</strong>.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="px-3 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold">
+                    {openTicketsCount} Activos / Sin Cerrar
+                  </span>
+                  <span className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 font-mono">
+                    Total Recibidos: {supportTickets.length}
+                  </span>
+                </div>
+              </div>
+
+              {/* 5 Status KPI Summary Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                <div className="p-3 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-0.5">
+                  <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Total Recibidos</span>
+                  <div className="text-lg font-bold text-slate-100 font-mono-numbers">{supportTickets.length}</div>
+                </div>
+                <div className="p-3 rounded-2xl bg-amber-950/20 border border-amber-500/30 space-y-0.5">
+                  <span className="text-[10px] text-amber-300 uppercase tracking-wider block">Abiertos</span>
+                  <div className="text-lg font-bold text-amber-400 font-mono-numbers">{countByStatus.ABIERTO}</div>
+                </div>
+                <div className="p-3 rounded-2xl bg-cyan-950/20 border border-cyan-500/30 space-y-0.5">
+                  <span className="text-[10px] text-cyan-300 uppercase tracking-wider block">En Revisión</span>
+                  <div className="text-lg font-bold text-cyan-400 font-mono-numbers">{countByStatus.EN_REVISION}</div>
+                </div>
+                <div className="p-3 rounded-2xl bg-emerald-950/20 border border-emerald-500/30 space-y-0.5">
+                  <span className="text-[10px] text-emerald-300 uppercase tracking-wider block">Resueltos</span>
+                  <div className="text-lg font-bold text-emerald-400 font-mono-numbers">{countByStatus.RESUELTO}</div>
+                </div>
+                <div className="p-3 rounded-2xl bg-purple-950/20 border border-purple-500/30 space-y-0.5">
+                  <span className="text-[10px] text-purple-300 uppercase tracking-wider block">Reembolso Procesado</span>
+                  <div className="text-lg font-bold text-purple-300 font-mono-numbers">{countByStatus.REEMBOLSO_PROCESADO}</div>
+                </div>
+              </div>
+
+              {/* Filter Tabs & Search Input */}
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pt-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {(
+                    [
+                      { id: 'ALL' as const, label: `Todos (${supportTickets.length})` },
+                      { id: 'ABIERTO' as const, label: `Abiertos (${countByStatus.ABIERTO})` },
+                      { id: 'EN_REVISION' as const, label: `En Revisión (${countByStatus.EN_REVISION})` },
+                      { id: 'RESPONDIDO' as const, label: `Respondidos (${countByStatus.RESPONDIDO})` },
+                      { id: 'RESUELTO' as const, label: `Resueltos (${countByStatus.RESUELTO})` },
+                      { id: 'REEMBOLSO_PROCESADO' as const, label: `Reembolso Procesado (${countByStatus.REEMBOLSO_PROCESADO})` }
+                    ] as const
+                  ).map(f => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => {
+                        setTicketStatusFilter(f.id);
+                        soundFx.playClick();
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
+                        ticketStatusFilter === f.id
+                          ? 'bg-amber-500 text-slate-950 border-amber-400 shadow'
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200 hover:border-slate-700'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="relative w-full lg:w-72">
+                  <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    value={ticketSearchQuery}
+                    onChange={e => setTicketSearchQuery(e.target.value)}
+                    placeholder="Buscar por usuario, ID, asunto o TXID..."
+                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+              </div>
+
+              {/* Received Tickets Control Table */}
+              <div className="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-950/60">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-slate-400 text-[10px] uppercase tracking-wider bg-slate-950/90">
+                      <th className="py-3 px-4">Ticket / Fecha</th>
+                      <th className="py-3 px-4">Usuario</th>
+                      <th className="py-3 px-4">Asunto / Categoría</th>
+                      <th className="py-3 px-4">Monto / Ref TX</th>
+                      <th className="py-3 px-4">Estado Actual</th>
+                      <th className="py-3 px-4 text-right">Cambiar Estado Rápido</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/70">
+                    {filteredTickets.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="py-10 text-center text-slate-500 text-xs">
+                          No se encontraron tickets con los filtros actuales.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredTickets.map(tkt => {
+                        const isSelected = activeTicket?.id === tkt.id;
+                        const badge = statusBadgeMap[tkt.status] || statusBadgeMap.ABIERTO;
+                        return (
+                          <tr
+                            key={tkt.id}
+                            onClick={() => {
+                              setSelectedAdminTicketId(tkt.id);
+                              if (tkt.paymentAmountCoins) {
+                                setCreditCoinsInput(String(tkt.paymentAmountCoins));
+                              } else {
+                                setCreditCoinsInput('0');
+                              }
+                              soundFx.playClick();
+                            }}
+                            className={`cursor-pointer transition-colors ${
+                              isSelected ? 'bg-amber-500/10' : 'hover:bg-slate-900/70'
+                            }`}
+                          >
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <div className="font-mono font-bold text-slate-200">#{tkt.id.slice(-6)}</div>
+                              <div className="text-[10px] text-slate-500">
+                                {new Date(tkt.updatedAt).toLocaleString([], {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })}
+                              </div>
+                            </td>
+                            <td className="py-3 px-4">
+                              <div className="font-semibold text-cyan-300 truncate max-w-[160px]">{tkt.userName}</div>
+                              <div className="text-[10px] text-slate-400 font-mono truncate max-w-[160px]">{tkt.userEmail}</div>
+                            </td>
+                            <td className="py-3 px-4">
+                              <div className="font-bold text-slate-100 truncate max-w-[230px]">{tkt.subject}</div>
+                              <div className="flex items-center gap-2 mt-0.5 text-[10px]">
+                                <span className="text-slate-400">{tkt.category}</span>
+                                <span
+                                  className={`font-bold px-1.5 py-0.2 rounded ${
+                                    tkt.priority === 'URGENTE'
+                                      ? 'bg-rose-500/20 text-rose-300'
+                                      : tkt.priority === 'ALTA'
+                                      ? 'bg-amber-500/20 text-amber-300'
+                                      : 'bg-slate-800 text-slate-300'
+                                  }`}
+                                >
+                                  {tkt.priority}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              {tkt.paymentAmountCoins ? (
+                                <div className="text-emerald-400 font-mono font-bold">
+                                  {tkt.paymentAmountCoins.toLocaleString()} mo (${(tkt.paymentAmountCoins * 0.8).toFixed(0)} USD)
+                                </div>
+                              ) : (
+                                <span className="text-slate-500">—</span>
+                              )}
+                              {tkt.paymentTxHash && (
+                                <div className="text-[10px] font-mono text-slate-400 truncate max-w-[130px]">
+                                  {tkt.paymentTxHash}
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${badge.className}`}>
+                                {badge.label}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap text-right" onClick={e => e.stopPropagation()}>
+                              <div className="inline-flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  disabled={tkt.status === 'EN_REVISION'}
+                                  onClick={() => updateSupportTicketStatus(tkt.id, 'EN_REVISION')}
+                                  title="Cambiar estado a En Revisión"
+                                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition ${
+                                    tkt.status === 'EN_REVISION'
+                                      ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 opacity-60 cursor-default'
+                                      : 'bg-slate-900 hover:bg-cyan-950/60 text-cyan-300 border-slate-700 hover:border-cyan-500/50'
+                                  }`}
+                                >
+                                  En Revisión
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={tkt.status === 'RESUELTO'}
+                                  onClick={() => updateSupportTicketStatus(tkt.id, 'RESUELTO')}
+                                  title="Cambiar estado a Resuelto"
+                                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition ${
+                                    tkt.status === 'RESUELTO'
+                                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 opacity-60 cursor-default'
+                                      : 'bg-slate-900 hover:bg-emerald-950/60 text-emerald-300 border-slate-700 hover:border-emerald-500/50'
+                                  }`}
+                                >
+                                  Resuelto
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={tkt.status === 'REEMBOLSO_PROCESADO'}
+                                  onClick={() =>
+                                    updateSupportTicketStatus(
+                                      tkt.id,
+                                      'REEMBOLSO_PROCESADO',
+                                      undefined,
+                                      tkt.paymentAmountCoins
+                                    )
+                                  }
+                                  title="Marcar como Reembolso Procesado"
+                                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition ${
+                                    tkt.status === 'REEMBOLSO_PROCESADO'
+                                      ? 'bg-purple-500/20 text-purple-300 border-purple-500/40 opacity-60 cursor-default'
+                                      : 'bg-slate-900 hover:bg-purple-950/60 text-purple-300 border-slate-700 hover:border-purple-500/50'
+                                  }`}
+                                >
+                                  Reembolso Procesado
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Selected Ticket Inspector & Full Status Action Console */}
+              <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
+                {activeTicket ? (
+                  <div className="space-y-4">
+                    {/* Header Details & Current Badge */}
+                    <div className="border-b border-slate-800 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                          <span>{activeTicket.subject}</span>
+                          <span className="text-xs font-mono text-slate-500">#{activeTicket.id.slice(-6)}</span>
+                        </h3>
+                        <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-1">
+                          <span>Usuario: <strong className="text-cyan-300">{activeTicket.userEmail}</strong></span>
+                          <span>Categoría: <strong className="text-slate-300">{activeTicket.category}</strong></span>
+                          {activeTicket.paymentGateway && (
+                            <span>Pasarela: <strong className="text-amber-300">{activeTicket.paymentGateway}</strong></span>
+                          )}
+                          {activeTicket.paymentAmountCoins && (
+                            <span>Monto Reclamado: <strong className="text-emerald-400">{activeTicket.paymentAmountCoins.toLocaleString()} mo (${(activeTicket.paymentAmountCoins * 0.8).toFixed(2)} USD)</strong></span>
+                          )}
+                        </div>
+                        {activeTicket.paymentTxHash && (
+                          <div className="mt-1.5 text-[11px] font-mono bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-lg text-slate-300 inline-block">
+                            TX Hash / Ref: {activeTicket.paymentTxHash}
+                          </div>
+                        )}
+                      </div>
+                      <span
+                        className={`self-start px-3 py-1 rounded-full text-xs font-bold border ${
+                          (statusBadgeMap[activeTicket.status] || statusBadgeMap.ABIERTO).className
+                        }`}
+                      >
+                        {(statusBadgeMap[activeTicket.status] || statusBadgeMap.ABIERTO).label}
+                      </span>
+                    </div>
+
+                    {/* Messages Thread */}
+                    <div className="space-y-3 max-h-[240px] overflow-y-auto pr-2">
+                      {activeTicket.messages.map(msg => (
+                        <div
+                          key={msg.id}
+                          className={`p-3 rounded-xl border text-xs ${
+                            msg.isAdmin
+                              ? 'bg-amber-950/20 border-amber-500/30 ml-6'
+                              : 'bg-slate-900 border-slate-800 mr-6'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className={`font-bold ${msg.isAdmin ? 'text-amber-300' : 'text-cyan-300'}`}>
+                              {msg.senderName} {msg.isAdmin && '👑 (Admin)'}
+                            </span>
+                            <span className="text-[10px] text-slate-500">
+                              {new Date(msg.timestamp).toLocaleString()}
+                            </span>
+                          </div>
+                          <p className="text-slate-200 whitespace-pre-wrap">{msg.message}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Reply Box + Direct Status Management Console */}
+                    <div className="space-y-4 pt-3 border-t border-slate-800">
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Escribir respuesta oficial al usuario..."
+                          value={adminReplyText}
+                          onChange={e => setAdminReplyText(e.target.value)}
+                          className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-400"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!adminReplyText.trim()) return;
+                            replyToTicket(activeTicket.id, adminReplyText.trim(), true);
+                            setAdminReplyText('');
+                            soundFx.playClick();
+                          }}
+                          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 font-bold text-xs rounded-xl flex items-center gap-1.5 transition"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          Responder
+                        </button>
+                      </div>
+
+                      {/* Status Control & Refund/Resolution Console */}
+                      <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-3">
+                        <div className="text-xs font-bold text-slate-200 flex items-center justify-between">
+                          <span className="flex items-center gap-1.5">
+                            <CheckCircle2 className="w-4 h-4 text-amber-400" />
+                            <span>Cambiar Estado del Ticket & Procesar Reembolso / Acreditación</span>
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            Ticket #{activeTicket.id.slice(-6)}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-[11px] text-slate-400 block mb-1">
+                              Monedas a Acreditar / Reembolsar (0 = solo actualizar estado)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              value={creditCoinsInput}
+                              onChange={e => setCreditCoinsInput(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs font-mono text-emerald-300 focus:outline-none focus:border-emerald-400"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[11px] text-slate-400 block mb-1">
+                              Nota Administrativa / Motivo del Cambio de Estado
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Ej: Validado en blockchain / Reembolso emitido a tarjeta"
+                              value={resolutionNotesInput}
+                              onChange={e => setResolutionNotesInput(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-amber-400"
+                            />
+                          </div>
+                        </div>
+
+                        {/* 3 Requested Status Action Buttons + Reopen */}
+                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateSupportTicketStatus(
+                                activeTicket.id,
+                                'EN_REVISION',
+                                resolutionNotesInput.trim() || undefined
+                              );
+                              setResolutionNotesInput('');
+                            }}
+                            className={`py-2.5 px-3 rounded-xl font-bold text-xs border flex items-center justify-center gap-1.5 transition ${
+                              activeTicket.status === 'EN_REVISION'
+                                ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200'
+                                : 'bg-cyan-950/40 hover:bg-cyan-900/50 border-cyan-500/40 text-cyan-300'
+                            }`}
+                          >
+                            <Clock className="w-3.5 h-3.5" />
+                            <span>En Revisión</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const amt = parseInt(creditCoinsInput, 10) || 0;
+                              if (amt > 0) {
+                                resolveSupportTicket(
+                                  activeTicket.id,
+                                  amt,
+                                  resolutionNotesInput.trim() || undefined
+                                );
+                              } else {
+                                updateSupportTicketStatus(
+                                  activeTicket.id,
+                                  'RESUELTO',
+                                  resolutionNotesInput.trim() || undefined
+                                );
+                              }
+                              setCreditCoinsInput('0');
+                              setResolutionNotesInput('');
+                            }}
+                            className={`py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 transition ${
+                              activeTicket.status === 'RESUELTO'
+                                ? 'bg-emerald-500 text-slate-950 shadow-lg'
+                                : 'bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 text-slate-950 shadow'
+                            }`}
+                          >
+                            <Check className="w-3.5 h-3.5 stroke-[3]" />
+                            <span>Resuelto</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const amt = parseInt(creditCoinsInput, 10) || 0;
+                              updateSupportTicketStatus(
+                                activeTicket.id,
+                                'REEMBOLSO_PROCESADO',
+                                resolutionNotesInput.trim() || undefined,
+                                amt > 0 ? amt : undefined
+                              );
+                              setCreditCoinsInput('0');
+                              setResolutionNotesInput('');
+                            }}
+                            className={`py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 transition ${
+                              activeTicket.status === 'REEMBOLSO_PROCESADO'
+                                ? 'bg-purple-500 text-white shadow-lg'
+                                : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 text-white shadow'
+                            }`}
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Reembolso Procesado</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateSupportTicketStatus(
+                                activeTicket.id,
+                                'ABIERTO',
+                                resolutionNotesInput.trim() || 'Ticket reabierto para seguimiento adicional.'
+                              );
+                              setResolutionNotesInput('');
+                            }}
+                            className="py-2.5 px-3 rounded-xl font-semibold text-xs bg-slate-950 hover:bg-slate-800 border border-slate-700 text-slate-300 flex items-center justify-center gap-1.5 transition"
+                          >
+                            <span>Reabrir Ticket</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full text-slate-500 text-xs py-16">
+                    <MessageSquare className="w-8 h-8 mb-2 opacity-40" />
+                    <span>Selecciona un ticket de la tabla superior para ver su historial y gestionar su estado.</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
     </div>
   );

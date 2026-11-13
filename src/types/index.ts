@@ -27,7 +27,7 @@ export interface AdminWithdrawalRecord {
   id: string;
   timestamp: number;
   amountUSD: number;
-  destinationType: 'crypto_usdt' | 'bank_wire' | 'paypal';
+  destinationType: 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'bank_wire' | 'paypal';
   destinationAddress: string;
   status: 'PROCESSED' | 'PENDING';
   txHash: string;
@@ -41,7 +41,7 @@ export interface PlayerRedemptionRequest {
   grossUSD: number;
   feeUSD: number; // 20% commission that goes directly to Owner's Vault
   netUSD: number; // 80% paid to player
-  destinationType: 'crypto_usdt' | 'paypal' | 'bank_wire';
+  destinationType: 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire';
   destinationAddress: string;
   status: 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED';
   timestamp: number;
@@ -249,6 +249,43 @@ export interface CasinoGameItem {
   iconEmoji: string;
   interactiveEngine: 'roulette' | 'blackjack' | 'poker' | 'slot_engine' | 'crash_engine' | 'mines_engine' | 'dice_engine' | 'baccarat_engine' | 'arena';
   featured?: boolean;
+}
+
+export type TicketCategory = 'PAYMENT_ISSUE' | 'WITHDRAWAL_QUERY' | 'ACCOUNT_SECURITY' | 'GAME_BUG' | 'GENERAL_SUPPORT';
+export type TicketPriority = 'BAJA' | 'MEDIA' | 'ALTA' | 'URGENTE';
+export type TicketStatus = 'ABIERTO' | 'EN_REVISION' | 'RESPONDIDO' | 'RESUELTO' | 'REEMBOLSO_PROCESADO';
+
+export interface TicketMessage {
+  id: string;
+  senderEmail: string;
+  senderName: string;
+  isAdmin: boolean;
+  message: string;
+  timestamp: number;
+}
+
+export interface SupportTicket {
+  id: string;
+  userEmail: string;
+  userName: string;
+  category: TicketCategory;
+  priority: TicketPriority;
+  subject: string;
+  status: TicketStatus;
+  createdAt: number;
+  updatedAt: number;
+  messages: TicketMessage[];
+  paymentTxHash?: string;
+  paymentAmountCoins?: number;
+  paymentGateway?: string;
+}
+
+export interface PaymentResolutionLookup {
+  txHashOrReference: string;
+  gateway: string;
+  amountExpectedUSD: number;
+  resolved: boolean;
+  creditedCoins?: number;
 }
 
 
