@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useGame, OWNER_EMAIL } from '../context/GameContext';
 import {
   Wallet,
@@ -41,7 +41,10 @@ import {
   LifeBuoy,
   MessageSquare,
   Search,
-  RotateCcw
+  RotateCcw,
+  Database,
+  KeyRound,
+  ShieldAlert
 } from 'lucide-react';
 import { soundFx } from '../utils/audio';
 import { CoinGiftRecord, HappyHourGameSection, HappyHourTargetGroup, TicketStatus } from '../types';
@@ -73,6 +76,8 @@ export const AdminPanel: React.FC = () => {
     onlinePlayersCount,
     offlinePlayersCount,
     userEmail,
+    authToken,
+    loginOwnerWithKey,
     isOwner,
     coins,
     coinGifts,
@@ -88,8 +93,103 @@ export const AdminPanel: React.FC = () => {
   } = useGame();
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'currency_control' | 'happy_hour' | 'redemptions' | 'support_tickets' | 'vault_split' | 'server_telemetry' | 'destinations' | 'withdraw' | 'audit'
+    'overview' | 'currency_control' | 'happy_hour' | 'redemptions' | 'support_tickets' | 'security_hardening' | 'vault_split' | 'server_telemetry' | 'destinations' | 'withdraw' | 'audit'
   >('redemptions');
+
+  // Server & Database Security Hardening State
+  const [securityStatus, setSecurityStatus] = useState<{
+    hardening: Record<string, string>;
+    integrity: {
+      sqliteOk: boolean;
+      chainValid: boolean;
+      checkedRows: number;
+      lockedAccountsCount: number;
+      dbSizeKB: number;
+    };
+    rateStats: { activeBuckets: number; blockedRequestsCount: number };
+    auditLogs: Array<{
+      seq: number;
+      id: string;
+      timestamp: number;
+      actor_email: string;
+      ip_address: string;
+      action: string;
+      severity: 'INFO' | 'WARN' | 'CRITICAL';
+      details: string;
+      prev_hash: string;
+      row_hash: string;
+    }>;
+  } | null>(null);
+  const [isLoadingSecurity, setIsLoadingSecurity] = useState(false);
+  const [isVerifyingIntegrity, setIsVerifyingIntegrity] = useState(false);
+  const [securityError, setSecurityError] = useState<string | null>(null);
+  const [serverMasterKeyInput, setServerMasterKeyInput] = useState('');
+
+  const fetchSecurityStatus = useCallback(async () => {
+    if (!authToken) return;
+    setIsLoadingSecurity(true);
+    setSecurityError(null);
+    try {
+      const res = await fetch('/api/admin/security-status', {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        setSecurityError(err.error || 'No se pudo consultar el estado de seguridad del servidor.');
+      } else {
+        const data = await res.json();
+        setSecurityStatus(data);
+      }
+    } catch {
+      setSecurityError('Error de conexión con el motor de seguridad del servidor.');
+    } finally {
+      setIsLoadingSecurity(false);
+    }
+  }, [authToken]);
+
+  useEffect(() => {
+    if (activeTab === 'security_hardening' && authToken) {
+      fetchSecurityStatus();
+    }
+  }, [activeTab, authToken, fetchSecurityStatus]);
+
+  const handleRunIntegrityAudit = async () => {
+    if (!authToken) return;
+    setIsVerifyingIntegrity(true);
+    setSecurityError(null);
+    try {
+      const res = await fetch('/api/admin/verify-integrity', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSecurityError(data.error || 'Error ejecutando la auditoría criptográfica.');
+      } else {
+        setSecurityStatus(prev =>
+          prev
+            ? {
+                ...prev,
+                integrity: data.integrity,
+                auditLogs: data.auditLogs || prev.auditLogs
+              }
+            : prev
+        );
+        soundFx.playBiometricSuccess();
+        addNotification(
+          data.ok ? 'Integridad Criptográfica Verificada' : 'Alerta de Integridad Detectada',
+          data.ok
+            ? `Base de datos SQLite OK y cadena SHA-256 intacta (${data.integrity?.checkedRows || 0} registros auditados).`
+            : 'Se detectó una inconsistencia en la verificación de integridad.',
+          data.ok ? 'success' : 'security'
+        );
+      }
+    } catch {
+      setSecurityError('No se pudo conectar con /api/admin/verify-integrity.');
+    } finally {
+      setIsVerifyingIntegrity(false);
+    }
+  };
 
   // Support Tickets Admin State
   const [selectedAdminTicketId, setSelectedAdminTicketId] = useState<string | null>(null);
@@ -442,6 +542,7 @@ export const AdminPanel: React.FC = () => {
             { id: 'happy_hour' as const, label: 'Horas Locas & Multiplicadores', icon: Flame, isLive: happyHourCampaign.isActive },
             { id: 'redemptions' as const, label: 'Autorización de Canjes', badge: pendingRedemptionsCount },
             { id: 'support_tickets' as const, label: 'Tablero de Tickets de Soporte', icon: LifeBuoy, badge: openTicketsCount },
+            { id: 'security_hardening' as const, label: 'Seguridad App & BD', icon: Lock },
             { id: 'vault_split' as const, label: 'Economía 70% Bóveda / 30% Premios' },
             { id: 'server_telemetry' as const, label: 'Telemetría del Servidor & Jugadores' },
             { id: 'destinations' as const, label: 'Configurar Bóvedas de Cobro' },
@@ -2070,13 +2171,45 @@ export const AdminPanel: React.FC = () => {
                     Supervisa todos los tickets recibidos, audita reclamos de pagos y actualiza estados a <strong>En Revisión</strong>, <strong>Resuelto</strong> o <strong>Reembolso Procesado</strong>.
                   </p>
                 </div>
-                <div className="flex items-center gap-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
                   <span className="px-3 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold">
                     {openTicketsCount} Activos / Sin Cerrar
                   </span>
                   <span className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 font-mono">
                     Total Recibidos: {supportTickets.length}
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const headers = ['ID', 'Fecha', 'Usuario', 'Email', 'Categoria', 'Prioridad', 'Estado', 'Asunto', 'Monedas', 'HashTX'];
+                      const rows = supportTickets.map(t => [
+                        t.id,
+                        new Date(t.updatedAt).toISOString(),
+                        `"${t.userName.replace(/"/g, '""')}"`,
+                        t.userEmail,
+                        t.category,
+                        t.priority,
+                        t.status,
+                        `"${t.subject.replace(/"/g, '""')}"`,
+                        t.paymentAmountCoins || 0,
+                        t.paymentTxHash || ''
+                      ]);
+                      const csv = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+                      const link = document.createElement('a');
+                      link.setAttribute('href', encodeURI(csv));
+                      link.setAttribute('download', `tickets_soporte_${new Date().toISOString().slice(0, 10)}.csv`);
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                      soundFx.playCoinChime();
+                      addNotification('Reporte CSV Descargado', 'Listado completo de tickets y estados exportado correctamente.', 'success');
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 font-bold flex items-center gap-1.5 transition"
+                    title="Exportar reporte completo de tickets de soporte en CSV"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Exportar CSV</span>
+                  </button>
                 </div>
               </div>
 
@@ -2356,8 +2489,32 @@ export const AdminPanel: React.FC = () => {
                       ))}
                     </div>
 
-                    {/* Reply Box + Direct Status Management Console */}
+                    {/* Reply Box + 1-Click Canned Replies + Direct Status Management Console */}
                     <div className="space-y-4 pt-3 border-t border-slate-800">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold mr-1">
+                          Respuestas Rápidas:
+                        </span>
+                        {[
+                          { label: '🔍 Validando Hash USDT', text: 'Estamos validando tu Hash TXID en la red Tron TRC-20. En unos minutos recibirás la actualización.' },
+                          { label: '✅ Depósito Acreditado', text: 'Tu depósito ha sido confirmado y las monedas ya se encuentran acreditadas en tu cuenta.' },
+                          { label: '💸 Reembolso Emitido', text: 'Hemos procesado el reembolso correspondiente al método de pago original. El caso queda actualizado.' },
+                          { label: '🛡️ Cuenta Activada', text: 'Tu cuenta real ha quedado verificada y activada tras la confirmación de tu depósito.' }
+                        ].map((tpl, i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => {
+                              setAdminReplyText(tpl.text);
+                              soundFx.playClick();
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-[10px] text-slate-300 hover:text-amber-300 transition"
+                          >
+                            {tpl.label}
+                          </button>
+                        ))}
+                      </div>
+
                       <div className="flex gap-2">
                         <input
                           type="text"
@@ -2524,6 +2681,264 @@ export const AdminPanel: React.FC = () => {
           </div>
         );
       })()}
+
+      {/* TAB: APP & DATABASE SECURITY HARDENING */}
+      {activeTab === 'security_hardening' && (
+        <div className="space-y-6 animate-in fade-in duration-300">
+          <div className="p-6 rounded-3xl bg-slate-900 border border-emerald-500/30 space-y-5 shadow-xl">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-bold text-slate-100 font-display flex items-center gap-2">
+                    <Lock className="w-5 h-5 text-emerald-400" />
+                    Seguridad Blindada: Aplicación & Base de Datos
+                  </h2>
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                    Producción Activa
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-1 max-w-2xl">
+                  Monitoreo en vivo de las capas criptográficas del backend Express + SQLite WAL (AES-256-GCM en reposo, hashing scrypt con salt aleatorio, tokens HMAC-SHA256, anti-fuerza bruta y auditoría encadenada).
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {authToken && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={fetchSecurityStatus}
+                      disabled={isLoadingSecurity}
+                      className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSecurity ? 'animate-spin' : ''}`} />
+                      <span>Actualizar Estado</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleRunIntegrityAudit}
+                      disabled={isVerifyingIntegrity}
+                      className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 text-slate-950 text-xs font-black shadow-lg flex items-center gap-1.5 transition active:scale-95 disabled:opacity-60"
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>{isVerifyingIntegrity ? 'Auditando SHA-256...' : 'Auditar Integridad Criptográfica de BD'}</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {!authToken ? (
+              <div className="p-6 rounded-2xl bg-slate-950/90 border border-amber-500/40 space-y-4">
+                <div className="flex items-start gap-3">
+                  <KeyRound className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <h3 className="text-sm font-bold text-amber-300">
+                      Autenticación Criptográfica de Servidor Requerida
+                    </h3>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      Para consultar los registros inmutables de auditoría y ejecutar la verificación SHA-256 en el servidor, valida tu Clave Maestra de Propietario ({OWNER_EMAIL}) y obtén un token firmado HMAC-SHA256.
+                    </p>
+                  </div>
+                </div>
+                <form
+                  onSubmit={async e => {
+                    e.preventDefault();
+                    if (!serverMasterKeyInput.trim()) return;
+                    const ok = await loginOwnerWithKey(serverMasterKeyInput.trim());
+                    if (ok) {
+                      setServerMasterKeyInput('');
+                    }
+                  }}
+                  className="flex flex-col sm:flex-row gap-2 max-w-xl"
+                >
+                  <input
+                    type="password"
+                    value={serverMasterKeyInput}
+                    onChange={e => setServerMasterKeyInput(e.target.value)}
+                    placeholder="Ingresa la Clave Maestra del Propietario..."
+                    className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-slate-100 focus:outline-none focus:border-amber-400 font-mono"
+                  />
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs uppercase tracking-wider transition"
+                  >
+                    Emitir Token Seguro
+                  </button>
+                </form>
+              </div>
+            ) : (
+              <>
+                {securityError && (
+                  <div className="p-3.5 rounded-xl bg-rose-950/50 border border-rose-500/40 text-xs text-rose-200 flex items-center gap-2">
+                    <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span>{securityError}</span>
+                  </div>
+                )}
+
+                {/* Integrity & Rate Limiter KPI Cards */}
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                  <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-1">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Integridad SQLite</span>
+                    <div className={`text-base font-black font-mono ${securityStatus?.integrity.sqliteOk ? 'text-emerald-400' : 'text-amber-300'}`}>
+                      {securityStatus ? (securityStatus.integrity.sqliteOk ? 'PRAGMA OK' : 'ALERTA') : '—'}
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-1">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Cadena SHA-256</span>
+                    <div className={`text-base font-black font-mono ${securityStatus?.integrity.chainValid ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {securityStatus ? (securityStatus.integrity.chainValid ? 'ÍNTEGRA' : 'ALTERADA') : '—'}
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-1">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Registros Auditados</span>
+                    <div className="text-base font-black text-cyan-300 font-mono-numbers">
+                      {securityStatus?.integrity.checkedRows ?? '—'}
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-1">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Cuentas Bloqueadas</span>
+                    <div className="text-base font-black text-amber-400 font-mono-numbers">
+                      {securityStatus?.integrity.lockedAccountsCount ?? 0}
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-1">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">IPs Bloqueadas (Rate)</span>
+                    <div className="text-base font-black text-purple-300 font-mono-numbers">
+                      {securityStatus?.rateStats.blockedRequestsCount ?? 0}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Hardening Layers Matrix */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {[
+                    {
+                      title: 'Cifrado en Reposo (Campo)',
+                      value: securityStatus?.hardening.encryptionAtRest || 'AES-256-GCM',
+                      desc: 'Hashes TXID y destinos sensibles cifrados antes de persistir en disco con IV aleatorio y AuthTag.',
+                      icon: Database
+                    },
+                    {
+                      title: 'Hashing de Contraseñas',
+                      value: securityStatus?.hardening.passwordHashing || 'scrypt + Salt 128-bit',
+                      desc: 'Derivación resistente a fuerza bruta en GPU/ASIC y comparación constant-time (timingSafeEqual).',
+                      icon: KeyRound
+                    },
+                    {
+                      title: 'Sesiones & Cookies Seguras',
+                      value: securityStatus?.hardening.sessionTokens || 'HMAC-SHA256 + HttpOnly',
+                      desc: 'Tokens firmados verificados en cada ruta administrativa y cookies HttpOnly SameSite=Lax.',
+                      icon: ShieldCheck
+                    },
+                    {
+                      title: 'Defensa SQL Injection & XSS',
+                      value: securityStatus?.hardening.sqlInjectionProtection || 'Consultas Parametrizadas',
+                      desc: 'Sentencias preparadas estrictas, sanitización anti-Prototype-Pollution y cabeceras CSP/NoSniff/HSTS.',
+                      icon: Lock
+                    },
+                    {
+                      title: 'Rate Limiter & Anti-Brute-Force',
+                      value: securityStatus?.hardening.rateLimiter || 'Ventana Deslizante + Lockout',
+                      desc: 'Bloqueo automático de 15 minutos tras 5 intentos fallidos y límite estricto por dirección IP.',
+                      icon: ShieldAlert
+                    },
+                    {
+                      title: 'Motor de Base de Datos',
+                      value: securityStatus?.hardening.databaseEngine || 'SQLite WAL + PostgreSQL 17 RLS',
+                      desc: `Tamaño actual de bóveda local: ${securityStatus?.integrity.dbSizeKB ?? 0} KB (secure_delete = ON).`,
+                      icon: Server
+                    }
+                  ].map((layer, idx) => (
+                    <div key={idx} className="p-4 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                          <layer.icon className="w-4 h-4 text-emerald-400" />
+                          {layer.title}
+                        </span>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/30">
+                          ACTIVO
+                        </span>
+                      </div>
+                      <div className="text-xs font-mono text-amber-300 font-bold">{layer.value}</div>
+                      <p className="text-[11px] text-slate-400 leading-relaxed">{layer.desc}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Tamper-Evident SHA-256 Audit Logs Table */}
+                <div className="space-y-3 pt-2">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                      <History className="w-4 h-4 text-cyan-400" />
+                      <span>Registro de Auditoría Inmutable (Cadena Hash SHA-256)</span>
+                    </h3>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      Últimos {securityStatus?.auditLogs.length ?? 0} eventos criptográficos
+                    </span>
+                  </div>
+
+                  <div className="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-950/70">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-800 text-slate-400 text-[10px] uppercase tracking-wider bg-slate-950">
+                          <th className="py-2.5 px-3">Seq</th>
+                          <th className="py-2.5 px-3">Fecha / Hora</th>
+                          <th className="py-2.5 px-3">Actor</th>
+                          <th className="py-2.5 px-3">IP Origen</th>
+                          <th className="py-2.5 px-3">Acción / Severidad</th>
+                          <th className="py-2.5 px-3">Detalles</th>
+                          <th className="py-2.5 px-3">Hash Encadenado</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 font-mono-numbers">
+                        {(securityStatus?.auditLogs || []).map(log => (
+                          <tr key={log.id} className="hover:bg-slate-900/60 transition-colors">
+                            <td className="py-2.5 px-3 font-mono text-slate-500">#{log.seq}</td>
+                            <td className="py-2.5 px-3 text-slate-400 whitespace-nowrap text-[11px]">
+                              {new Date(log.timestamp).toLocaleString([], {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit'
+                              })}
+                            </td>
+                            <td className="py-2.5 px-3 text-cyan-300 font-semibold truncate max-w-[150px]">
+                              {log.actor_email}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-slate-400 text-[11px]">{log.ip_address}</td>
+                            <td className="py-2.5 px-3 whitespace-nowrap">
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded border mr-1.5 ${
+                                  log.severity === 'CRITICAL'
+                                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                                    : log.severity === 'WARN'
+                                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                    : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                }`}
+                              >
+                                {log.severity}
+                              </span>
+                              <span className="font-mono text-slate-200 text-[11px]">{log.action}</span>
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-300 font-sans max-w-xs truncate" title={log.details}>
+                              {log.details}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-[10px] text-emerald-400/90" title={log.row_hash}>
+                              {log.row_hash.slice(0, 14)}...
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
     </div>
   );

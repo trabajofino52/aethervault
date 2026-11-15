@@ -66,6 +66,7 @@ interface GameContextType {
   
   // User, Owner & Demo Session
   userEmail: string;
+  authToken: string | null;
   isOwner: boolean;
   isDemoAccount: boolean;
   isRealAccountActive: boolean;
@@ -370,6 +371,27 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
+  const [authToken, setAuthToken] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem('av_api_token');
+    } catch {
+      return null;
+    }
+  });
+
+  const persistAuthToken = useCallback((token: string | null) => {
+    setAuthToken(token);
+    try {
+      if (token) {
+        sessionStorage.setItem('av_api_token', token);
+      } else {
+        sessionStorage.removeItem('av_api_token');
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const isOwner = userEmail.trim().toLowerCase() === OWNER_EMAIL.toLowerCase() && isOwnerAuthenticated;
   const isDemoAccount =
     userEmail.trim().toLowerCase() === DEMO_USERNAME.toLowerCase() ||
@@ -402,7 +424,51 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const loginOwnerWithKey = async (password: string): Promise<boolean> => {
-    const hash = await sha256(password.trim());
+    const cleanPass = password.trim();
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: OWNER_EMAIL, password: cleanPass })
+      });
+
+      if (res.ok) {
+        const data = (await res.json()) as { token?: string };
+        if (data.token) {
+          persistAuthToken(data.token);
+        }
+        setUserEmail(OWNER_EMAIL);
+        setIsOwnerAuthenticated(true);
+        try {
+          localStorage.setItem(STORAGE_KEY_USER_EMAIL, OWNER_EMAIL);
+          localStorage.setItem('aethervault_owner_auth_v1', 'true');
+        } catch {
+          // ignore
+        }
+        soundFx.playBiometricSuccess();
+        addNotification(
+          'Sesión de Propietario Cifrada 256-bit Verificada',
+          `Bienvenido de vuelta ${OWNER_EMAIL}. Bóveda del Dueño y Auditoría de Servidor desbloqueadas con token HMAC-SHA256.`,
+          'security'
+        );
+        return true;
+      }
+
+      if (res.status === 401 || res.status === 429) {
+        const errData = (await res.json().catch(() => ({}))) as { error?: string };
+        soundFx.playClick();
+        addNotification(
+          res.status === 429 ? 'Bloqueo de Seguridad Activo' : 'Clave Maestra Inválida',
+          errData.error || 'La clave ingresada no coincide con los registros cifrados del servidor.',
+          'security'
+        );
+        return false;
+      }
+    } catch {
+      // Fallback to local SHA-256 verification if backend unreachable
+    }
+
+    const hash = await sha256(cleanPass);
     if (hash === OWNER_KEY_HASH_256) {
       setUserEmail(OWNER_EMAIL);
       setIsOwnerAuthenticated(true);
@@ -431,7 +497,55 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const loginDemoUser = async (password: string): Promise<boolean> => {
-    if (password.trim() === DEMO_PASSWORD) {
+    const cleanPass = password.trim();
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: DEMO_USERNAME, password: cleanPass })
+      });
+
+      if (res.ok) {
+        const data = (await res.json()) as { token?: string };
+        if (data.token) {
+          persistAuthToken(data.token);
+        }
+        setUserEmail(DEMO_USERNAME);
+        setIsOwnerAuthenticated(false);
+        setCoins(DEMO_INITIAL_COINS);
+        try {
+          localStorage.setItem(STORAGE_KEY_USER_EMAIL, DEMO_USERNAME);
+          localStorage.setItem('aethervault_owner_auth_v1', 'false');
+          localStorage.setItem(STORAGE_KEY_COINS, DEMO_INITIAL_COINS.toString());
+        } catch {
+          // ignore
+        }
+        soundFx.playWinFanfare();
+        confetti({ particleCount: 90, spread: 70 });
+        addNotification(
+          '🎮 Cuenta Demo Activada (gokudemo)',
+          '¡Bienvenido gokudemo! Tu cuenta demo aislada cuenta con $5,000 USD (6,250 monedas) para probar todos los juegos sin riesgo.',
+          'reward'
+        );
+        setActiveTab('top_50_casino');
+        return true;
+      }
+
+      if (res.status === 401 || res.status === 429) {
+        const errData = (await res.json().catch(() => ({}))) as { error?: string };
+        soundFx.playClick();
+        addNotification(
+          res.status === 429 ? 'Bloqueo Temporal Activo' : 'Clave Demo Incorrecta',
+          errData.error || 'La clave ingresada para la cuenta demo gokudemo es incorrecta.',
+          'security'
+        );
+        return false;
+      }
+    } catch {
+      // Fallback to local verification
+    }
+
+    if (cleanPass === DEMO_PASSWORD) {
       setUserEmail(DEMO_USERNAME);
       setIsOwnerAuthenticated(false);
       setCoins(DEMO_INITIAL_COINS);
@@ -496,6 +610,22 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {
       // ignore
     }
+
+    fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: cleanEmail, password: '' })
+    })
+      .then(async res => {
+        if (res.ok) {
+          const data = (await res.json()) as { token?: string };
+          if (data.token) persistAuthToken(data.token);
+        }
+      })
+      .catch(() => {
+        // ignore network fallback
+      });
+
     soundFx.playClick();
     addNotification(
       'Sesión de Jugador Estándar',
@@ -509,12 +639,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const guestEmail = 'jugador_anonimo@aethervault.com';
     setUserEmail(guestEmail);
     setIsOwnerAuthenticated(false);
+    persistAuthToken(null);
     try {
       localStorage.setItem(STORAGE_KEY_USER_EMAIL, guestEmail);
       localStorage.setItem('aethervault_owner_auth_v1', 'false');
     } catch {
       // ignore
     }
+    fetch('/api/auth/logout', { method: 'POST' }).catch(() => {
+      // ignore
+    });
     soundFx.playClick();
     addNotification('Sesión Cerrada', 'Has cerrado sesión. La Bóveda del Dueño y el módulo de Banco Digital ahora están bloqueados.', 'info');
     setActiveTab('store');
@@ -1646,32 +1780,57 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     paymentAmountCoins?: number;
     paymentGateway?: string;
   }): SupportTicket => {
+    const now = Date.now();
     const newTicket: SupportTicket = {
-      id: 'tkt_' + Date.now(),
+      id: 'tkt_' + now,
       userEmail,
       userName: character.name || userEmail.split('@')[0],
       category: ticketData.category,
       priority: ticketData.priority,
       subject: ticketData.subject,
       status: 'ABIERTO',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      createdAt: now,
+      updatedAt: now,
       paymentTxHash: ticketData.paymentTxHash,
       paymentAmountCoins: ticketData.paymentAmountCoins,
       paymentGateway: ticketData.paymentGateway,
       messages: [
         {
-          id: 'msg_' + Date.now(),
+          id: 'msg_' + now,
           senderEmail: userEmail,
           senderName: character.name || userEmail.split('@')[0],
           isAdmin: isOwner,
           message: ticketData.initialMessage,
-          timestamp: Date.now()
+          timestamp: now
         }
       ]
     };
 
     setSupportTickets(prev => [newTicket, ...prev]);
+
+    if (authToken) {
+      fetch('/api/support/tickets', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          id: newTicket.id,
+          userName: newTicket.userName,
+          category: ticketData.category,
+          priority: ticketData.priority,
+          subject: ticketData.subject,
+          initialMessage: ticketData.initialMessage,
+          paymentTxHash: ticketData.paymentTxHash,
+          paymentAmountCoins: ticketData.paymentAmountCoins,
+          paymentGateway: ticketData.paymentGateway
+        })
+      }).catch(() => {
+        // local state fallback active
+      });
+    }
+
     soundFx.playClick();
     addNotification(
       'Ticket de Soporte Creado',
@@ -1707,6 +1866,19 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return tkt;
       })
     );
+
+    if (authToken) {
+      fetch(`/api/support/tickets/${encodeURIComponent(ticketId)}/reply`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ message: text.trim() })
+      }).catch(() => {
+        // ignore fallback
+      });
+    }
 
     soundFx.playClick();
     addNotification(
@@ -1843,6 +2015,22 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       )
     );
 
+    if (authToken) {
+      fetch(`/api/support/tickets/${encodeURIComponent(ticketId)}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          status: newStatus,
+          note: notes?.trim() || undefined
+        })
+      }).catch(() => {
+        // ignore fallback
+      });
+    }
+
     addNotification(
       `Ticket #${ticketId.slice(-6)} → ${statusLabels[newStatus]}`,
       `El estado del ticket de ${tkt.userEmail} se actualizó a "${statusLabels[newStatus]}".`,
@@ -1856,6 +2044,37 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateUserPassword = async (currentPassword: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
     if (!newPassword || newPassword.length < 6) {
       return { success: false, message: 'La nueva contraseña debe tener al menos 6 caracteres.' };
+    }
+
+    if (authToken) {
+      try {
+        const res = await fetch('/api/auth/change-password', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`
+          },
+          body: JSON.stringify({
+            currentPassword: currentPassword.trim(),
+            newPassword
+          })
+        });
+        const data = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string; error?: string };
+        if (res.ok && data.ok) {
+          soundFx.playBiometricSuccess();
+          addNotification(
+            'Contraseña Actualizada (scrypt BD)',
+            data.message || 'Tu nueva contraseña ha sido cifrada con scrypt en la base de datos.',
+            'security'
+          );
+          return { success: true, message: data.message || 'Contraseña actualizada y protegida con scrypt.' };
+        }
+        if (res.status === 400 || res.status === 401 || res.status === 403) {
+          return { success: false, message: data.error || 'No fue posible verificar tu contraseña actual.' };
+        }
+      } catch {
+        // Fallback to local verification
+      }
     }
 
     if (isOwner) {
@@ -2347,6 +2566,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isHistoryModalOpen,
         setIsHistoryModalOpen,
         userEmail,
+        authToken,
         isOwner,
         isDemoAccount,
         isRealAccountActive,
