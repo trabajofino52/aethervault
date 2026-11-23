@@ -21,6 +21,7 @@ import {
   Check
 } from 'lucide-react';
 import { soundFx } from '../utils/audio';
+import { logVmExperience } from '../utils/telemetry';
 import { TicketCategory, TicketPriority, SupportTicket } from '../types';
 
 export const UserSupportPanel: React.FC = () => {
@@ -91,6 +92,19 @@ export const UserSupportPanel: React.FC = () => {
       initialMessage: initialMessage.trim(),
       paymentTxHash: relatedTxHash.trim() || undefined,
       paymentAmountCoins: relatedAmountUSD ? Math.round(parseFloat(relatedAmountUSD) / 0.8) : undefined
+    });
+
+    logVmExperience({
+      userEmail,
+      category: 'USER_FEEDBACK',
+      gameName: category,
+      severity: category === 'GAME_BUG' || category === 'PAYMENT_ISSUE' ? 'BUG_REPORT' : 'INFO',
+      summary: `[Ticket #${createdTicket.id.slice(-6)}] ${subject.trim()}`,
+      details: {
+        priority,
+        message: initialMessage.trim().slice(0, 400),
+        txHash: relatedTxHash.trim() || undefined
+      }
     });
 
     setSubject('');
@@ -606,7 +620,7 @@ export const UserSupportPanel: React.FC = () => {
                   <div>
                     <strong className="text-amber-300">Cuenta Propietario (trabajofino52@gmail.com):</strong>
                     <p className="text-[11px] text-slate-300 mt-0.5">
-                      Protegida con la Clave Maestra de 256 bits (<code className="text-amber-300 font-mono">GokuCheckersMasterKey2024Secure</code>). Se verificará criptográficamente antes de autorizar el cambio.
+                      Protegida con hashing scrypt en la base de datos SQL. Se verificará tu clave actual en el servidor antes de autorizar el cambio.
                     </p>
                   </div>
                 </div>

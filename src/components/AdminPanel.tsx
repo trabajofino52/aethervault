@@ -44,10 +44,31 @@ import {
   RotateCcw,
   Database,
   KeyRound,
-  ShieldAlert
+  ShieldAlert,
+  FileText,
+  Mail
 } from 'lucide-react';
 import { soundFx } from '../utils/audio';
-import { CoinGiftRecord, HappyHourGameSection, HappyHourTargetGroup, TicketStatus } from '../types';
+import {
+  CoinGiftRecord,
+  HappyHourGameSection,
+  HappyHourTargetGroup,
+  TicketStatus,
+  CoinPurchaseOrder,
+  VmExperienceLog,
+  VmTesterSlot,
+  CardGatewayProvider,
+  PrimarySettlementRail
+} from '../types';
+import { VaultConfigPanel } from './VaultConfigPanel';
+import { AuditTrail } from './AuditTrail';
+import {
+  initGmailAuth,
+  signInWithGoogleForGmail,
+  getGmailAccessToken,
+  logoutGmail,
+  sendSummaryViaGmailApi
+} from '../utils/gmailAuth';
 
 export const AdminPanel: React.FC = () => {
   const {
@@ -62,12 +83,17 @@ export const AdminPanel: React.FC = () => {
     transactions,
     addNotification,
     redemptionRequests,
+    redeemableUsers,
+    refreshRedemptionsFromServer,
+    validateAndCreateAdminRedemption,
+    syncRedemptionToFirestore,
     approveRedemptionRequest,
     rejectRedemptionRequest,
     vaultEconomics,
     vaultRetentionRate,
     playerPrizeRate,
     redemptionFeeRate,
+    transferFeeRate,
     updateVaultMargins,
     provablyFairHistory,
     serverMetrics,
@@ -77,6 +103,7 @@ export const AdminPanel: React.FC = () => {
     offlinePlayersCount,
     userEmail,
     authToken,
+    firebaseUser,
     loginOwnerWithKey,
     isOwner,
     coins,
@@ -93,7 +120,21 @@ export const AdminPanel: React.FC = () => {
   } = useGame();
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'currency_control' | 'happy_hour' | 'redemptions' | 'support_tickets' | 'security_hardening' | 'vault_split' | 'server_telemetry' | 'destinations' | 'withdraw' | 'audit'
+    | 'overview'
+    | 'currency_control'
+    | 'happy_hour'
+    | 'redemptions'
+    | 'support_tickets'
+    | 'vm_qa_logs'
+    | 'security_hardening'
+    | 'vault_split'
+    | 'server_telemetry'
+    | 'destinations'
+    | 'vault_apis'
+    | 'executive_summary'
+    | 'withdraw'
+    | 'audit'
+    | 'audit_trail'
   >('redemptions');
 
   // Server & Database Security Hardening State
@@ -106,7 +147,17 @@ export const AdminPanel: React.FC = () => {
       lockedAccountsCount: number;
       dbSizeKB: number;
     };
-    rateStats: { activeBuckets: number; blockedRequestsCount: number };
+    rateStats: {
+      activeBuckets: number;
+      blockedRequestsCount: number;
+      wafBlockedCount?: number;
+      csrfBlockedCount?: number;
+    };
+    vulnerabilityScan?: {
+      scorePercent: number;
+      environmentMode: 'VM_SANDBOX' | 'VPS_PRODUCTION';
+      checks: Array<{ id: string; name: string; status: 'PASS' | 'WARN'; detail: string }>;
+    };
     auditLogs: Array<{
       seq: number;
       id: string;
@@ -124,6 +175,92 @@ export const AdminPanel: React.FC = () => {
   const [isVerifyingIntegrity, setIsVerifyingIntegrity] = useState(false);
   const [securityError, setSecurityError] = useState<string | null>(null);
   const [serverMasterKeyInput, setServerMasterKeyInput] = useState('');
+
+  // USDT Purchase Orders Ledger State
+  const [usdtOrders, setUsdtOrders] = useState<CoinPurchaseOrder[]>([]);
+  const [isLoadingUsdtOrders, setIsLoadingUsdtOrders] = useState(false);
+
+  // VM QA Experience Logs & 10 Testers State
+  const [vmLogs, setVmLogs] = useState<VmExperienceLog[]>([]);
+  const [vmTesters, setVmTesters] = useState<VmTesterSlot[]>([]);
+  const [vmLogsSummary, setVmLogsSummary] = useState<{
+    maxVmTesters: number;
+    activeTestersCount: number;
+    totalLogs: number;
+    errorsCount: number;
+    bugReportsCount: number;
+  }>({ maxVmTesters: 10, activeTestersCount: 10, totalLogs: 0, errorsCount: 0, bugReportsCount: 0 });
+  const [vmLogSeverityFilter, setVmLogSeverityFilter] = useState<'ALL' | 'ERROR' | 'BUG_REPORT' | 'WARN' | 'INFO'>('ALL');
+  const [isLoadingVmLogs, setIsLoadingVmLogs] = useState(false);
+
+  // Executive Summary & Full Conversation History State
+  const [fullSummary, setFullSummary] = useState<{
+    subject: string;
+    generatedAt: string;
+    recipientEmail: string;
+    markdownReport: string;
+    plainTextReport: string;
+    metrics: {
+      totalOrders: number;
+      settledOrders: number;
+      settledVolumeUSD: number;
+      vmTestersCount: number;
+      securityScore: number;
+    };
+  } | null>(null);
+  const [isLoadingFullSummary, setIsLoadingFullSummary] = useState(false);
+
+  // Gmail Client-Side Delivery State (In-Memory Token Only)
+  const [gmailUserEmail, setGmailUserEmail] = useState<string | null>(null);
+  const [isGmailConnected, setIsGmailConnected] = useState(false);
+  const [isConnectingGmail, setIsConnectingGmail] = useState(false);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [showGmailConfirmModal, setShowGmailConfirmModal] = useState(false);
+  const [gmailSendFeedback, setGmailSendFeedback] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const fetchUsdtOrders = useCallback(async () => {
+    if (!authToken) return;
+    setIsLoadingUsdtOrders(true);
+    try {
+      const res = await fetch('/api/admin/usdt-orders', {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { orders?: CoinPurchaseOrder[] };
+        setUsdtOrders(data.orders || []);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsLoadingUsdtOrders(false);
+    }
+  }, [authToken]);
+
+  const handleReviewUsdtOrder = async (orderId: string, decision: 'VERIFIED_SETTLED' | 'REJECTED') => {
+    if (!authToken) return;
+    try {
+      const res = await fetch(`/api/admin/usdt-orders/${encodeURIComponent(orderId)}/review`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ decision })
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { orders?: CoinPurchaseOrder[] };
+        if (data.orders) setUsdtOrders(data.orders);
+        soundFx.playCoinChime();
+        addNotification(
+          decision === 'VERIFIED_SETTLED' ? 'Orden USDT Aprobada' : 'Orden USDT Rechazada',
+          `La orden #${orderId.slice(-6)} ha sido actualizada en la bóveda USDT.`,
+          decision === 'VERIFIED_SETTLED' ? 'success' : 'info'
+        );
+      }
+    } catch {
+      // ignore
+    }
+  };
 
   const fetchSecurityStatus = useCallback(async () => {
     if (!authToken) return;
@@ -147,11 +284,234 @@ export const AdminPanel: React.FC = () => {
     }
   }, [authToken]);
 
+  const fetchVmExperienceLogs = useCallback(async () => {
+    if (!authToken) return;
+    setIsLoadingVmLogs(true);
+    try {
+      const qs = new URLSearchParams({ severity: vmLogSeverityFilter, limit: '200' });
+      const res = await fetch(`/api/admin/experience-logs?${qs.toString()}`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        const data = (await res.json()) as {
+          logs?: VmExperienceLog[];
+          testers?: VmTesterSlot[];
+          summary?: typeof vmLogsSummary;
+        };
+        setVmLogs(data.logs || []);
+        setVmTesters(data.testers || []);
+        if (data.summary) setVmLogsSummary(data.summary);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsLoadingVmLogs(false);
+    }
+  }, [authToken, vmLogSeverityFilter]);
+
+  const handleResetVmTester = async (email: string) => {
+    if (!authToken) return;
+    try {
+      const res = await fetch('/api/admin/vm-testers/reset', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ email, coinsBalance: 6250, isActive: true })
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { testers?: VmTesterSlot[] };
+        if (data.testers) setVmTesters(data.testers);
+        soundFx.playCoinChime();
+        addNotification('Tester VM Reiniciado', `${email} reiniciado con 6,250 monedas ($5,000 USD de prueba).`, 'success');
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleExportVmReport = async () => {
+    if (!authToken) return;
+    try {
+      const res = await fetch('/api/admin/experience-logs/export', {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        const report = await res.json();
+        const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `aethervault-vm-diagnostic-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        soundFx.playCoinChime();
+        addNotification(
+          'Reporte QA Descargado',
+          'Archivo JSON con toda la experiencia de los 10 testers, errores y vulnerabilidades listo para analizar.',
+          'success'
+        );
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleClearVmLogs = async () => {
+    if (!authToken) return;
+    try {
+      const res = await fetch('/api/admin/experience-logs', {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        setVmLogs([]);
+        fetchVmExperienceLogs();
+        addNotification('Bitácora QA Limpiada', 'Listo para una nueva ronda de pruebas en Máquina Virtual.', 'info');
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const fetchFullSummary = useCallback(async () => {
+    if (!authToken) return;
+    setIsLoadingFullSummary(true);
+    try {
+      const res = await fetch('/api/admin/full-summary', {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setFullSummary(data);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsLoadingFullSummary(false);
+    }
+  }, [authToken]);
+
   useEffect(() => {
     if (activeTab === 'security_hardening' && authToken) {
       fetchSecurityStatus();
     }
-  }, [activeTab, authToken, fetchSecurityStatus]);
+    if (activeTab === 'destinations' && authToken) {
+      fetchUsdtOrders();
+    }
+    if (activeTab === 'vm_qa_logs' && authToken) {
+      fetchVmExperienceLogs();
+    }
+    if (activeTab === 'executive_summary' && authToken) {
+      fetchFullSummary();
+    }
+  }, [activeTab, authToken, fetchSecurityStatus, fetchUsdtOrders, fetchVmExperienceLogs, fetchFullSummary]);
+
+  useEffect(() => {
+    const unsubscribe = initGmailAuth(
+      user => {
+        setIsGmailConnected(true);
+        setGmailUserEmail(user.email || OWNER_EMAIL);
+      },
+      () => {
+        setIsGmailConnected(false);
+        setGmailUserEmail(null);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  const handleConnectGmail = async () => {
+    setIsConnectingGmail(true);
+    setGmailSendFeedback(null);
+    try {
+      const result = await signInWithGoogleForGmail();
+      if (result) {
+        setIsGmailConnected(true);
+        setGmailUserEmail(result.user.email || OWNER_EMAIL);
+        soundFx.playBiometricSuccess();
+        addNotification(
+          'Gmail Conectado',
+          `Sesión autorizada como ${result.user.email || OWNER_EMAIL} para enviar el resumen completo.`,
+          'success'
+        );
+        if (authToken) {
+          void fetch('/api/admin/audit-trail/record', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+              action: 'OWNER_AUTH_GMAIL_CONNECTED',
+              severity: 'INFO',
+              details: `Sesión Gmail OAuth conectada como ${result.user.email || OWNER_EMAIL}`
+            })
+          }).catch(() => {});
+        }
+      }
+    } catch (err) {
+      setGmailSendFeedback({
+        ok: false,
+        message: err instanceof Error ? err.message : 'No se pudo completar el inicio de sesión con Google.'
+      });
+    } finally {
+      setIsConnectingGmail(false);
+    }
+  };
+
+  const handleConfirmSendGmail = async () => {
+    if (!fullSummary) return;
+    const token = getGmailAccessToken();
+    if (!token) {
+      setIsGmailConnected(false);
+      setShowGmailConfirmModal(false);
+      setGmailSendFeedback({
+        ok: false,
+        message: 'La autorización de Gmail expiró. Vuelve a iniciar sesión con Google.'
+      });
+      return;
+    }
+
+    setIsSendingEmail(true);
+    setGmailSendFeedback(null);
+    try {
+      const result = await sendSummaryViaGmailApi({
+        toEmail: OWNER_EMAIL,
+        subject: fullSummary.subject,
+        bodyText: fullSummary.plainTextReport
+      });
+      setShowGmailConfirmModal(false);
+      if (result.ok) {
+        soundFx.playWinFanfare();
+        setGmailSendFeedback({
+          ok: true,
+          message: `¡Correo enviado con éxito a ${OWNER_EMAIL}! (ID: ${result.messageId || 'confirmado'})`
+        });
+        addNotification(
+          'Resumen Enviado por Gmail',
+          `Se envió el resumen completo + historial de conversación a ${OWNER_EMAIL}.`,
+          'success'
+        );
+      } else {
+        setGmailSendFeedback({
+          ok: false,
+          message: result.error || 'Error al enviar el correo mediante Gmail.'
+        });
+      }
+    } catch {
+      setShowGmailConfirmModal(false);
+      setGmailSendFeedback({
+        ok: false,
+        message: 'Error de red enviando el mensaje a través de Gmail.'
+      });
+    } finally {
+      setIsSendingEmail(false);
+    }
+  };
 
   const handleRunIntegrityAudit = async () => {
     if (!authToken) return;
@@ -171,6 +531,7 @@ export const AdminPanel: React.FC = () => {
             ? {
                 ...prev,
                 integrity: data.integrity,
+                vulnerabilityScan: data.vulnerabilityScan || prev.vulnerabilityScan,
                 auditLogs: data.auditLogs || prev.auditLogs
               }
             : prev
@@ -222,7 +583,19 @@ export const AdminPanel: React.FC = () => {
   // Destination form state
   const [trc20, setTrc20] = useState(payoutConfig.usdtTrc20Address);
   const [erc20, setErc20] = useState(payoutConfig.usdtErc20Address);
+  const [bep20, setBep20] = useState(payoutConfig.usdtBep20Address || payoutConfig.usdtErc20Address);
+  const [btcAddress, setBtcAddress] = useState(payoutConfig.btcAddress || 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh');
+  const [binancePayId, setBinancePayId] = useState(payoutConfig.binancePayId || '');
+  const [autoConvertToUsdt, setAutoConvertToUsdt] = useState(payoutConfig.autoConvertToUsdt ?? true);
   const [paypal, setPaypal] = useState(payoutConfig.paypalEmail);
+  const [paypalMode, setPaypalMode] = useState<'BUSINESS' | 'PERSONAL'>(payoutConfig.paypalMode || 'BUSINESS');
+  const [cardGatewayProvider, setCardGatewayProvider] = useState<CardGatewayProvider>(
+    payoutConfig.cardGatewayProvider || 'NOWPAYMENTS_CARD_TO_CRYPTO'
+  );
+  const [primarySettlementRail, setPrimarySettlementRail] = useState<PrimarySettlementRail>(
+    payoutConfig.primarySettlementRail || 'USDT'
+  );
+  const [vmTestModeEnabled, setVmTestModeEnabled] = useState<boolean>(payoutConfig.vmTestModeEnabled ?? true);
   const [iban, setIban] = useState(payoutConfig.bankIbanSwift);
   const [holder, setHolder] = useState(payoutConfig.bankAccountHolder);
   const [merchant, setMerchant] = useState(payoutConfig.merchantName);
@@ -231,14 +604,39 @@ export const AdminPanel: React.FC = () => {
   // Dynamic Margins Local State
   const [sliderRetention, setSliderRetention] = useState(vaultRetentionRate);
   const [sliderFee, setSliderFee] = useState(redemptionFeeRate);
+  const [sliderTransferFee, setSliderTransferFee] = useState(transferFeeRate);
   const [marginsSaved, setMarginsSaved] = useState(false);
+
+  useEffect(() => {
+    setSliderRetention(vaultRetentionRate);
+    setSliderFee(redemptionFeeRate);
+    setSliderTransferFee(transferFeeRate);
+  }, [vaultRetentionRate, redemptionFeeRate, transferFeeRate]);
 
   // Withdrawal form state
   const [withdrawAmount, setWithdrawAmount] = useState<string>('500');
   const [withdrawMethod, setWithdrawMethod] = useState<'crypto_usdt' | 'bank_wire' | 'paypal'>('crypto_usdt');
   const [isProcessingWd, setIsProcessingWd] = useState(false);
 
-  const pendingRedemptionsCount = redemptionRequests.filter(r => r.status === 'PENDING_APPROVAL').length;
+  // Client 30% Withdrawal Validator & Espera de Autorización Engine State
+  const [wdPlayerEmail, setWdPlayerEmail] = useState<string>('');
+  const [wdRequestedCoins, setWdRequestedCoins] = useState<string>('5000');
+  const [wdDestType, setWdDestType] = useState<'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire'>('crypto_usdt');
+  const [wdDestAddress, setWdDestAddress] = useState<string>('TX_VM_USDT_TRC20_TEST');
+  const [isValidatingWd, setIsValidatingWd] = useState<boolean>(false);
+  const [wdValidatorResult, setWdValidatorResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [redemptionStatusFilter, setRedemptionStatusFilter] = useState<'ALL' | 'AWAITING' | 'APPROVED' | 'REJECTED'>('ALL');
+
+  useEffect(() => {
+    if (!wdPlayerEmail && redeemableUsers.length > 0) {
+      const preferred = redeemableUsers.find(u => u.isActive && u.coinsBalance > 0) || redeemableUsers[0];
+      if (preferred) setWdPlayerEmail(preferred.email);
+    }
+  }, [redeemableUsers, wdPlayerEmail]);
+
+  const pendingRedemptionsCount = redemptionRequests.filter(
+    r => r.status === 'PENDING_APPROVAL' || r.awaitingAuthorization
+  ).length;
   const openTicketsCount = supportTickets.filter(t => t.status !== 'RESUELTO' && t.status !== 'REEMBOLSO_PROCESADO').length;
 
   const handleSendGift = async () => {
@@ -324,7 +722,7 @@ export const AdminPanel: React.FC = () => {
   };
 
   const handleSaveMargins = () => {
-    updateVaultMargins(sliderRetention, sliderFee);
+    updateVaultMargins(sliderRetention, sliderFee, sliderTransferFee);
     setMarginsSaved(true);
     setTimeout(() => setMarginsSaved(false), 2500);
   };
@@ -379,15 +777,24 @@ export const AdminPanel: React.FC = () => {
     updatePayoutConfig({
       usdtTrc20Address: trc20,
       usdtErc20Address: erc20,
+      usdtBep20Address: bep20,
+      btcAddress,
+      binancePayId,
+      autoConvertToUsdt,
       paypalEmail: paypal,
+      paypalMode,
+      cardGatewayProvider,
+      primarySettlementRail,
+      vmTestModeEnabled,
+      maxVmTesters: 10,
       bankIbanSwift: iban,
       bankAccountHolder: holder,
       merchantName: merchant
     });
     setIsSaved(true);
     addNotification(
-      'Bóvedas de Cobro Actualizadas',
-      'Tus destinos para recibir los pagos de clientes han sido guardados con cifrado E2EE.',
+      'Bóveda de Cobros Actualizada',
+      'Tus cuentas USDT, Bitcoin (BTC), PayPal, Banco y pasarela de tarjetas quedaron cifradas con AES-256-GCM en la bóveda.',
       'success'
     );
     setTimeout(() => setIsSaved(false), 3000);
@@ -542,12 +949,16 @@ export const AdminPanel: React.FC = () => {
             { id: 'happy_hour' as const, label: 'Horas Locas & Multiplicadores', icon: Flame, isLive: happyHourCampaign.isActive },
             { id: 'redemptions' as const, label: 'Autorización de Canjes', badge: pendingRedemptionsCount },
             { id: 'support_tickets' as const, label: 'Tablero de Tickets de Soporte', icon: LifeBuoy, badge: openTicketsCount },
+            { id: 'vm_qa_logs' as const, label: 'Logs QA & 10 Testers VM', icon: Activity },
             { id: 'security_hardening' as const, label: 'Seguridad App & BD', icon: Lock },
             { id: 'vault_split' as const, label: 'Economía 70% Bóveda / 30% Premios' },
             { id: 'server_telemetry' as const, label: 'Telemetría del Servidor & Jugadores' },
-            { id: 'destinations' as const, label: 'Configurar Bóvedas de Cobro' },
+            { id: 'destinations' as const, label: 'Órdenes USDT & Destinos', icon: Wallet },
+            { id: 'vault_apis' as const, label: 'VaultConfigPanel: APIs & Retiros', icon: KeyRound },
+            { id: 'executive_summary' as const, label: 'Resumen & Correo', icon: Mail },
             { id: 'withdraw' as const, label: 'Retirar Fondos a Billetera' },
             { id: 'audit' as const, label: 'Libro Contable' },
+            { id: 'audit_trail' as const, label: 'AuditTrail (Auditoría Integral)', icon: ShieldCheck },
             { id: 'overview' as const, label: 'Guía de Recaudación' }
           ] as const
         ).map(tab => (
@@ -1288,141 +1699,481 @@ export const AdminPanel: React.FC = () => {
         </div>
       )}
 
-      {/* TAB: REDEMPTIONS (AUTORIZACIÓN DE CANJES DE JUGADORES) */}
-      {activeTab === 'redemptions' && (
-        <div className="space-y-6">
-          <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-5">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-xl font-bold text-slate-100 font-display flex items-center gap-2">
-                    <ShieldCheck className="w-5 h-5 text-amber-400" />
-                    Cola de Autorización de Canjes de Monedas
-                  </h2>
-                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                    Solo Administrador
+      {/* TAB: REDEMPTIONS (VALIDADOR 30% + ESPERA DE AUTORIZACIÓN MANUAL) */}
+      {activeTab === 'redemptions' && (() => {
+        const selectedUser = redeemableUsers.find(
+          u => u.email.toLowerCase() === wdPlayerEmail.trim().toLowerCase()
+        );
+        const parsedReqCoins = Math.max(0, Math.floor(Number(wdRequestedCoins) || 0));
+        const previewBalance = selectedUser?.coinsBalance ?? 0;
+        const previewMax30 = selectedUser?.maxAllowed30PctCoins ?? Math.floor(previewBalance * 0.30);
+        const willAutoClamp = parsedReqCoins > previewMax30 && previewMax30 > 0;
+        const previewFinalCoins = willAutoClamp ? previewMax30 : Math.min(parsedReqCoins, previewMax30);
+
+        const filteredRedemptions = redemptionRequests.filter(req => {
+          if (redemptionStatusFilter === 'AWAITING') {
+            return req.awaitingAuthorization || req.status === 'PENDING_APPROVAL';
+          }
+          if (redemptionStatusFilter === 'APPROVED') return req.status === 'APPROVED';
+          if (redemptionStatusFilter === 'REJECTED') return req.status === 'REJECTED';
+          return true;
+        });
+
+        const isGoogleOwnerConnected =
+          Boolean(firebaseUser?.emailVerified) &&
+          firebaseUser?.email?.toLowerCase() === OWNER_EMAIL.toLowerCase();
+
+        return (
+          <div className="space-y-6">
+            {/* Motor de Validación Automática 30% + Creación en Espera de Autorización */}
+            <div className="p-6 rounded-3xl bg-slate-900 border border-amber-500/30 space-y-5 shadow-xl">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-lg font-bold text-slate-100 font-display flex items-center gap-2">
+                      <Lock className="w-5 h-5 text-amber-400" />
+                      Validador Automático de Retiros (Límite 30% + Espera de Autorización)
+                    </h2>
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                      Tope Auto 30% Activo
+                    </span>
+                    <span
+                      className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${
+                        isGoogleOwnerConnected
+                          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                          : 'bg-slate-800 text-slate-300 border-slate-700'
+                      }`}
+                    >
+                      {isGoogleOwnerConnected
+                        ? 'SQLite + Firestore Sincronizado'
+                        : 'SQLite Activo (Conecta Google en Bóveda para Firestore)'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1 max-w-3xl leading-relaxed">
+                    Cualquier solicitud de salida ingresada se valida contra el balance total del usuario en la base de datos. Si excede el{' '}
+                    <strong className="text-amber-300">30% permitido</strong>, el sistema la{' '}
+                    <strong className="text-emerald-300">limita automáticamente al 30%</strong> y la registra con el campo{' '}
+                    <code className="text-cyan-300 bg-slate-950 px-1.5 py-0.5 rounded">awaiting_authorization = TRUE</code> requiriendo acción manual tuya ({OWNER_EMAIL}).
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => void refreshRedemptionsFromServer()}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 shrink-0 border border-slate-700"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Actualizar Saldos BD
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="md:col-span-2">
+                  <label className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1.5">
+                    Usuario / Cliente en Base de Datos
+                  </label>
+                  {redeemableUsers.length > 0 ? (
+                    <select
+                      value={wdPlayerEmail}
+                      onChange={e => setWdPlayerEmail(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-amber-400"
+                    >
+                      {redeemableUsers.map(u => (
+                        <option key={u.id} value={u.email}>
+                          {u.email} ({u.role}) — Balance: {u.coinsBalance.toLocaleString()} mo | Máx 30%: {u.maxAllowed30PctCoins.toLocaleString()} mo {!u.isActive ? '[INACTIVO]' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="email"
+                      value={wdPlayerEmail}
+                      onChange={e => setWdPlayerEmail(e.target.value)}
+                      placeholder="tester01@vm.aethervault.local"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-amber-400"
+                    />
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1.5">
+                    Monto Solicitado (Monedas)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={wdRequestedCoins}
+                    onChange={e => setWdRequestedCoins(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs font-mono text-amber-300 font-bold focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1.5">
+                    Método de Salida
+                  </label>
+                  <select
+                    value={wdDestType}
+                    onChange={e =>
+                      setWdDestType(
+                        e.target.value as 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire'
+                      )
+                    }
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-amber-400"
+                  >
+                    <option value="crypto_usdt">USDT (TRC-20)</option>
+                    <option value="crypto_btc">Bitcoin (BTC)</option>
+                    <option value="crypto_monero">Monero (XMR)</option>
+                    <option value="paypal">PayPal Business</option>
+                    <option value="bank_wire">Transferencia Bancaria</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                <div className="md:col-span-2">
+                  <label className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1.5">
+                    Dirección / Cuenta Destino del Cliente
+                  </label>
+                  <input
+                    type="text"
+                    value={wdDestAddress}
+                    onChange={e => setWdDestAddress(e.target.value)}
+                    placeholder="ej. TX89... o correo PayPal"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  disabled={isValidatingWd || !wdPlayerEmail.trim() || parsedReqCoins <= 0 || !wdDestAddress.trim()}
+                  onClick={async () => {
+                    setIsValidatingWd(true);
+                    setWdValidatorResult(null);
+                    const res = await validateAndCreateAdminRedemption({
+                      playerEmail: wdPlayerEmail,
+                      playerName: selectedUser?.displayName,
+                      requestedCoins: parsedReqCoins,
+                      destinationType: wdDestType,
+                      destinationAddress: wdDestAddress
+                    });
+                    setWdValidatorResult({ ok: res.ok, message: res.message });
+                    setIsValidatingWd(false);
+                  }}
+                  className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-black text-xs shadow-lg flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  {isValidatingWd ? 'Validando en BD...' : 'Validar 30% y Crear en Espera'}
+                </button>
+              </div>
+
+              {/* Previsualización en tiempo real del recorte automático al 30% */}
+              {selectedUser && (
+                <div
+                  className={`p-3.5 rounded-2xl border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                    willAutoClamp
+                      ? 'bg-amber-950/30 border-amber-500/40 text-amber-200'
+                      : 'bg-emerald-950/20 border-emerald-500/30 text-emerald-200'
+                  }`}
+                >
+                  <div className="space-y-0.5">
+                    <div className="font-bold flex items-center gap-2">
+                      {willAutoClamp ? (
+                        <>
+                          <AlertCircle className="w-4 h-4 text-amber-400" />
+                          <span>
+                            Recorte Automático Activo: {parsedReqCoins.toLocaleString()} mo excede el 30% → se limitará a{' '}
+                            <strong className="text-amber-300">{previewMax30.toLocaleString()} monedas</strong>
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          <span>
+                            Dentro del límite del 30%: saldrán{' '}
+                            <strong className="text-emerald-300">{previewFinalCoins.toLocaleString()} monedas</strong> con campo{' '}
+                            <code>Espera de Autorización = SÍ</code>
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-slate-400 font-mono-numbers">
+                      Balance Total: {previewBalance.toLocaleString()} mo · Límite 30%: {previewMax30.toLocaleString()} mo · Neto 80% estimado: $
+                      {(previewFinalCoins * 0.8 * (1 - redemptionFeeRate / 100)).toFixed(2)} USD
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-700 text-[10px] font-bold uppercase tracking-wider text-cyan-300 shrink-0">
+                    Requiere Acción Manual de {OWNER_EMAIL}
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
-                  Cuando un jugador solicita canjear sus monedas por dinero real, se descuenta de su cuenta y pasa a esta cola.
-                  Al autorizarlo, se deduce en automático un <strong className="text-amber-400">20% de comisión que va directamente a tu Bóveda</strong>, y se transfiere el 80% neto al jugador.
-                </p>
-              </div>
+              )}
 
-              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 font-mono-numbers shrink-0">
-                Total Comisiones 20% Recaudadas: <strong className="text-slate-100 text-sm">${vaultEconomics.withdrawalFeesCollected.toFixed(2)} USD</strong>
-              </div>
+              {wdValidatorResult && (
+                <div
+                  className={`p-3 rounded-xl border text-xs font-semibold ${
+                    wdValidatorResult.ok
+                      ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
+                      : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+                  }`}
+                >
+                  {wdValidatorResult.message}
+                </div>
+              )}
             </div>
 
-            {/* Redemptions Table */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs font-mono-numbers divide-y divide-slate-800">
-                <thead>
-                  <tr className="text-slate-400 text-[10px] uppercase">
-                    <th className="py-3 px-3">ID / Fecha</th>
-                    <th className="py-3 px-3">Jugador</th>
-                    <th className="py-3 px-3">Monedas Solicitadas</th>
-                    <th className="py-3 px-3">Bruto ($0.80/mo)</th>
-                    <th className="py-3 px-3 text-amber-400 font-bold">20% Bóveda Dueño</th>
-                    <th className="py-3 px-3 text-emerald-400 font-bold">80% Pago Neto</th>
-                    <th className="py-3 px-3">Destino</th>
-                    <th className="py-3 px-3">Estado</th>
-                    <th className="py-3 px-3 text-right">Acción Autorizadora</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/60 text-slate-300">
-                  {redemptionRequests.length === 0 ? (
-                    <tr>
-                      <td colSpan={9} className="py-8 text-center text-slate-500">
-                        No hay solicitudes de canje pendientes en este momento.
-                      </td>
+            {/* Cola de Espera de Autorización */}
+            <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-5">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-xl font-bold text-slate-100 font-display flex items-center gap-2">
+                      <ShieldCheck className="w-5 h-5 text-amber-400" />
+                      Cola de Autorización de Canjes de Monedas
+                    </h2>
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                      Solo Propietario ({OWNER_EMAIL})
+                    </span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                      Espera de Autorización: {pendingRedemptionsCount}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
+                    Los clientes están limitados al <strong className="text-amber-300">30% de su balance total</strong> y cada solicitud nace en{' '}
+                    <strong className="text-cyan-300">Espera de Autorización (SÍ)</strong> hasta que tú ({OWNER_EMAIL}) la apruebes o rechaces manualmente en la base de datos.
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 font-mono-numbers shrink-0">
+                  Total Comisiones {redemptionFeeRate}% Recaudadas:{' '}
+                  <strong className="text-slate-100 text-sm">${vaultEconomics.withdrawalFeesCollected.toFixed(2)} USD</strong>
+                </div>
+              </div>
+
+              {/* Filter Pills */}
+              <div className="flex flex-wrap items-center gap-2">
+                {(
+                  [
+                    { id: 'ALL' as const, label: `Todas (${redemptionRequests.length})` },
+                    { id: 'AWAITING' as const, label: `En Espera de Autorización (${pendingRedemptionsCount})` },
+                    {
+                      id: 'APPROVED' as const,
+                      label: `Autorizadas (${redemptionRequests.filter(r => r.status === 'APPROVED').length})`
+                    },
+                    {
+                      id: 'REJECTED' as const,
+                      label: `Rechazadas (${redemptionRequests.filter(r => r.status === 'REJECTED').length})`
+                    }
+                  ] as const
+                ).map(tab => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setRedemptionStatusFilter(tab.id)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
+                      redemptionStatusFilter === tab.id
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Redemptions Table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs font-mono-numbers divide-y divide-slate-800">
+                  <thead>
+                    <tr className="text-slate-400 text-[10px] uppercase">
+                      <th className="py-3 px-3">ID / Fecha / Sync</th>
+                      <th className="py-3 px-3">Jugador</th>
+                      <th className="py-3 px-3">Validación 30% Balance</th>
+                      <th className="py-3 px-3 text-amber-400 font-bold">20% Bóveda</th>
+                      <th className="py-3 px-3 text-emerald-400 font-bold">80% Pago Neto</th>
+                      <th className="py-3 px-3">Destino</th>
+                      <th className="py-3 px-3 text-cyan-300 font-bold">Espera de Autorización</th>
+                      <th className="py-3 px-3">Estado</th>
+                      <th className="py-3 px-3 text-right">Acción Manual</th>
                     </tr>
-                  ) : (
-                    redemptionRequests.map(req => (
-                      <tr key={req.id} className="hover:bg-slate-950/40 transition-colors">
-                        <td className="py-3 px-3">
-                          <div className="font-mono text-slate-200">{req.id}</div>
-                          <div className="text-[10px] text-slate-500">
-                            {new Date(req.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {new Date(req.timestamp).toLocaleDateString()}
-                          </div>
-                        </td>
-                        <td className="py-3 px-3">
-                          <div className="font-semibold text-slate-200">{req.playerName}</div>
-                          <div className="text-[10px] text-slate-400 truncate max-w-[150px]">{req.playerEmail}</div>
-                        </td>
-                        <td className="py-3 px-3 font-bold text-amber-300">
-                          {req.amountCoins.toLocaleString()} monedas
-                        </td>
-                        <td className="py-3 px-3 text-slate-300">
-                          ${req.grossUSD.toFixed(2)} USD
-                        </td>
-                        <td className="py-3 px-3 font-bold text-amber-400 bg-amber-500/5">
-                          +${req.feeUSD.toFixed(2)} USD
-                        </td>
-                        <td className="py-3 px-3 font-bold text-emerald-400">
-                          ${req.netUSD.toFixed(2)} USD
-                        </td>
-                        <td className="py-3 px-3">
-                          <div className="uppercase text-[10px] text-slate-400 font-bold">{req.destinationType}</div>
-                          <div className="font-mono text-[11px] text-slate-300 truncate max-w-[120px]" title={req.destinationAddress}>
-                            {req.destinationAddress}
-                          </div>
-                        </td>
-                        <td className="py-3 px-3">
-                          {req.status === 'PENDING_APPROVAL' && (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                              PENDIENTE
-                            </span>
-                          )}
-                          {req.status === 'APPROVED' && (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
-                              AUTORIZADO
-                            </span>
-                          )}
-                          {req.status === 'REJECTED' && (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-400 border border-rose-500/40">
-                              RECHAZADO
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          {req.status === 'PENDING_APPROVAL' ? (
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button
-                                onClick={async () => {
-                                  await approveRedemptionRequest(req.id);
-                                }}
-                                className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow transition-transform active:scale-95"
-                                title="Autorizar canje y retener 20% para la bóveda"
-                              >
-                                <Check className="w-3.5 h-3.5 stroke-[3]" />
-                                Autorizar
-                              </button>
-                              <button
-                                onClick={async () => {
-                                  await rejectRedemptionRequest(req.id, 'Verificación de fondos no superada');
-                                }}
-                                className="px-2 py-1.5 bg-slate-800 hover:bg-rose-900/60 text-slate-400 hover:text-rose-300 rounded-lg text-xs font-bold transition-colors"
-                                title="Rechazar y reembolsar monedas"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          ) : (
-                            <span className="text-[11px] text-slate-500 italic">
-                              Revisado {req.reviewedAt ? new Date(req.reviewedAt).toLocaleDateString() : ''}
-                            </span>
-                          )}
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                    {filteredRedemptions.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="py-8 text-center text-slate-500">
+                          No hay solicitudes de retiro en esta categoría.
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                    ) : (
+                      filteredRedemptions.map(req => {
+                        const isAwaiting = req.awaitingAuthorization || req.status === 'PENDING_APPROVAL';
+                        const pctOfBalance =
+                          req.balanceBeforeCoins && req.balanceBeforeCoins > 0
+                            ? Math.round((req.amountCoins / req.balanceBeforeCoins) * 1000) / 10
+                            : null;
+                        const exceedsCapSafety =
+                          typeof req.balanceBeforeCoins === 'number' &&
+                          req.balanceBeforeCoins > 0 &&
+                          req.amountCoins > Math.floor(req.balanceBeforeCoins * 0.3);
+
+                        return (
+                          <tr key={req.id} className="hover:bg-slate-950/40 transition-colors">
+                            <td className="py-3 px-3">
+                              <div className="font-mono text-slate-200">{req.id}</div>
+                              <div className="text-[10px] text-slate-500">
+                                {new Date(req.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} -{' '}
+                                {new Date(req.timestamp).toLocaleDateString()}
+                              </div>
+                              {req.firestoreSynced ? (
+                                <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                                  Firestore OK
+                                </span>
+                              ) : isAwaiting && isGoogleOwnerConnected ? (
+                                <button
+                                  type="button"
+                                  onClick={() => void syncRedemptionToFirestore(req)}
+                                  className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30"
+                                >
+                                  Subir a Firestore
+                                </button>
+                              ) : (
+                                <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-800 text-slate-400">
+                                  SQLite Local
+                                </span>
+                              )}
+                            </td>
+
+                            <td className="py-3 px-3">
+                              <div className="font-semibold text-slate-200">{req.playerName}</div>
+                              <div className="text-[10px] text-slate-400 truncate max-w-[150px]">{req.playerEmail}</div>
+                            </td>
+
+                            <td className="py-3 px-3">
+                              <div className="font-bold text-amber-300">{req.amountCoins.toLocaleString()} monedas</div>
+                              {typeof req.balanceBeforeCoins === 'number' && req.balanceBeforeCoins > 0 && (
+                                <div className="text-[10px] text-slate-400">
+                                  {pctOfBalance}% de {req.balanceBeforeCoins.toLocaleString()} mo (Tope: {(req.maxAllowed30PctCoins ?? Math.floor(req.balanceBeforeCoins * 0.3)).toLocaleString()})
+                                </div>
+                              )}
+                              {req.cappedAutomatically && (
+                                <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                  LIMITADO AUTO 30% (de {(req.requestedOriginalCoins ?? req.amountCoins).toLocaleString()} mo)
+                                </span>
+                              )}
+                              {exceedsCapSafety && (
+                                <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                                  ALERTA: EXCEDE 30%
+                                </span>
+                              )}
+                            </td>
+
+                            <td className="py-3 px-3 font-bold text-amber-400 bg-amber-500/5">
+                              +${req.feeUSD.toFixed(2)} USD
+                            </td>
+
+                            <td className="py-3 px-3 font-bold text-emerald-400">
+                              <div>${req.netUSD.toFixed(2)} USD</div>
+                              <div className="text-[10px] text-slate-500 font-normal">Bruto ${req.grossUSD.toFixed(2)}</div>
+                            </td>
+
+                            <td className="py-3 px-3">
+                              <div className="uppercase text-[10px] text-slate-400 font-bold">{req.destinationType}</div>
+                              <div className="font-mono text-[11px] text-slate-300 truncate max-w-[120px]" title={req.destinationAddress}>
+                                {req.destinationAddress}
+                              </div>
+                            </td>
+
+                            <td className="py-3 px-3">
+                              {isAwaiting ? (
+                                <div className="space-y-1">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+                                    <Clock className="w-3 h-3" />
+                                    SÍ (ESPERA ACCIÓN)
+                                  </span>
+                                  <div className="text-[10px] text-slate-400">Requiere: {OWNER_EMAIL}</div>
+                                </div>
+                              ) : (
+                                <div className="space-y-0.5">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                                    NO (RESUELTA)
+                                  </span>
+                                  <div className="text-[10px] text-slate-500">
+                                    Por: {req.authorizedByEmail || OWNER_EMAIL}
+                                  </div>
+                                </div>
+                              )}
+                            </td>
+
+                            <td className="py-3 px-3 space-y-1">
+                              {req.status === 'PENDING_APPROVAL' && (
+                                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                  PENDIENTE
+                                </span>
+                              )}
+                              {req.status === 'APPROVED' && (
+                                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+                                  AUTORIZADO
+                                </span>
+                              )}
+                              {req.status === 'REJECTED' && (
+                                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-400 border border-rose-500/40">
+                                  RECHAZADO
+                                </span>
+                              )}
+                              {req.payoutStatus && (
+                                <div className="font-mono text-[10px] text-cyan-300">
+                                  {req.payoutStatus}
+                                </div>
+                              )}
+                              {req.externalPayoutId && (
+                                <div className="font-mono text-[9px] text-slate-400 truncate max-w-[130px]" title={req.externalPayoutId}>
+                                  Ref: {req.externalPayoutId}
+                                </div>
+                              )}
+                            </td>
+
+                            <td className="py-3 px-3 text-right">
+                              {isAwaiting ? (
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <button
+                                    type="button"
+                                    disabled={exceedsCapSafety}
+                                    onClick={async () => {
+                                      await approveRedemptionRequest(req.id);
+                                    }}
+                                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1 shadow transition-transform active:scale-95 disabled:opacity-40"
+                                    title="Autorizar manualmente y liberar pago (desactiva Espera de Autorización)"
+                                  >
+                                    <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                    Autorizar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      await rejectRedemptionRequest(req.id, 'Rechazado manualmente por trabajofino52@gmail.com');
+                                    }}
+                                    className="px-2 py-1.5 bg-slate-800 hover:bg-rose-900/60 text-slate-400 hover:text-rose-300 rounded-lg text-xs font-bold transition-colors"
+                                    title="Rechazar manualmente y reembolsar monedas"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-[11px] text-slate-500 italic">
+                                  Revisado {req.reviewedAt ? new Date(req.reviewedAt).toLocaleDateString() : ''}
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* TAB: VAULT SPLIT ECONOMICS (70% BÓVEDA / 30% PREMIOS) */}
       {activeTab === 'vault_split' && (
@@ -1480,7 +2231,7 @@ export const AdminPanel: React.FC = () => {
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {/* Retention Slider */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-xs">
@@ -1506,7 +2257,7 @@ export const AdminPanel: React.FC = () => {
                 {/* Fee Slider */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-300 font-medium">Comisión Automática Retiro Canjes:</span>
+                    <span className="text-slate-300 font-medium">Comisión Retiro PayPal/USDT:</span>
                     <span className="font-mono font-bold text-emerald-400 text-sm">{sliderFee}%</span>
                   </div>
                   <input
@@ -1524,29 +2275,51 @@ export const AdminPanel: React.FC = () => {
                     <span>35% (Premium)</span>
                   </div>
                 </div>
+
+                {/* P2P Transfer Fee Slider */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Comisión Transferencia P2P:</span>
+                    <span className="font-mono font-bold text-cyan-400 text-sm">{sliderTransferFee}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="25"
+                    step="1"
+                    value={sliderTransferFee}
+                    onChange={e => setSliderTransferFee(Number(e.target.value))}
+                    className="w-full accent-cyan-500 cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+                    <span>0% (Gratis)</span>
+                    <span>5% (Estándar Casino)</span>
+                    <span>25% (Máximo)</span>
+                  </div>
+                </div>
               </div>
 
               <div className="flex items-center justify-between pt-2">
                 <span className="text-[11px] text-slate-400">
-                  Fondo de premios auto-calculado: <strong className="text-cyan-400">{100 - sliderRetention}%</strong> de apuestas.
+                  Fondo premios: <strong className="text-cyan-400">{100 - sliderRetention}%</strong> · Retiro: <strong className="text-emerald-400">{sliderFee}%</strong> · P2P: <strong className="text-cyan-300">{sliderTransferFee}%</strong>.
                 </span>
                 <button
                   onClick={handleSaveMargins}
                   className="px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-extrabold text-xs rounded-xl shadow active:scale-95 transition-all flex items-center gap-1.5"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5]" />
-                  <span>{marginsSaved ? '¡Márgenes Actualizados!' : 'Guardar Nuevos Márgenes'}</span>
+                  <span>{marginsSaved ? '¡Márgenes Actualizados en Servidor!' : 'Guardar Nuevos Márgenes'}</span>
                 </button>
               </div>
             </div>
 
             {/* Detailed Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="p-5 rounded-2xl bg-amber-950/30 border border-amber-500/30 space-y-2">
                 <div className="text-xs font-bold text-amber-400 uppercase tracking-wider">
                   1. Retención en Bóveda ({vaultRetentionRate}%)
                 </div>
-                <div className="text-2xl font-black text-slate-100 font-mono-numbers">
+                <div className="text-2xl font-black text-slate-100 font-mono tabular-nums">
                   {vaultEconomics.houseVaultShare.toLocaleString()} <span className="text-xs text-amber-400">monedas</span>
                 </div>
                 <p className="text-[11px] text-slate-300 leading-relaxed">
@@ -1558,7 +2331,7 @@ export const AdminPanel: React.FC = () => {
                 <div className="text-xs font-bold text-cyan-400 uppercase tracking-wider">
                   2. Reserva para Premios ({playerPrizeRate}%)
                 </div>
-                <div className="text-2xl font-black text-slate-100 font-mono-numbers">
+                <div className="text-2xl font-black text-slate-100 font-mono tabular-nums">
                   {vaultEconomics.playerPrizeReserve.toLocaleString()} <span className="text-xs text-cyan-400">monedas</span>
                 </div>
                 <p className="text-[11px] text-slate-300 leading-relaxed">
@@ -1570,11 +2343,23 @@ export const AdminPanel: React.FC = () => {
                 <div className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
                   3. Tarifa de Retiro ({redemptionFeeRate}%)
                 </div>
-                <div className="text-2xl font-black text-emerald-400 font-mono-numbers">
+                <div className="text-2xl font-black text-emerald-400 font-mono tabular-nums">
                   ${vaultEconomics.withdrawalFeesCollected.toFixed(2)} USD
                 </div>
                 <p className="text-[11px] text-slate-300 leading-relaxed">
-                  Cobradas de forma automática cuando un jugador canjea monedas por dinero fiat o cripto previa autorización.
+                  Cobradas de forma automática cuando un jugador canjea monedas por PayPal o USDT previa autorización.
+                </p>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-slate-950 border border-cyan-500/30 space-y-2">
+                <div className="text-xs font-bold text-cyan-300 uppercase tracking-wider">
+                  4. Comisión P2P ({transferFeeRate}%)
+                </div>
+                <div className="text-2xl font-black text-cyan-300 font-mono tabular-nums">
+                  {transferFeeRate}% <span className="text-xs text-slate-400">por envío</span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  Deducida automáticamente en cada transferencia de monedas entre jugadores en vivo antes de acreditar al receptor.
                 </p>
               </div>
             </div>
@@ -1585,7 +2370,7 @@ export const AdminPanel: React.FC = () => {
                 Fórmula de Ganancia Neta Total de la Bóveda:
               </div>
               <div className="font-mono text-amber-300 bg-slate-900 p-3 rounded-xl border border-slate-800/80">
-                Beneficio = (Recargas de Monedas Tier 1-10) + ({vaultRetentionRate}% Volumen Apostado) + ({redemptionFeeRate}% Comisión de Cada Canje) + (Pagos Ascensión Nivel 11-100)
+                Beneficio = (Recargas Tier 1-10) + ({vaultRetentionRate}% Volumen Apostado) + ({redemptionFeeRate}% Comisión Retiro) + ({transferFeeRate}% Comisión P2P) + (Ascensión Nivel 11-100)
               </div>
             </div>
 
@@ -1821,111 +2606,387 @@ export const AdminPanel: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 2: DESTINATIONS CONFIG */}
+      {/* TAB 2: DESTINATIONS CONFIG & USDT PURCHASE ORDERS */}
       {activeTab === 'destinations' && (
-        <form onSubmit={handleSaveDestinations} className="space-y-6">
-          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="space-y-6">
+          <form onSubmit={handleSaveDestinations} className="space-y-6">
+            <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-100 font-display">
+                    Destinos de Cobro USDT & Bóveda del Administrador
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Configura tus billeteras USDT donde caen los pagos de compra de monedas de los jugadores (guardadas con cifrado AES-256-GCM en el servidor).
+                  </p>
+                </div>
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 text-slate-950 font-extrabold text-xs rounded-xl shadow transition-all active:scale-95 flex items-center gap-1.5"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>{isSaved ? '¡Guardado en Bóveda!' : 'Guardar y Activar Bóvedas USDT'}</span>
+                </button>
+              </div>
+
+              <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4" />
+                    Enrutamiento Automático de Todas las Compras a Cuenta USDT
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Cuando está activo, tanto pagos directos cripto como compras por tarjeta/PayPal/banco se liquidan contablemente hacia tu cuenta USDT configurada.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAutoConvertToUsdt(v => !v)}
+                  className={`px-4 py-2 rounded-xl text-xs font-black border transition shrink-0 ${
+                    autoConvertToUsdt
+                      ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                      : 'bg-slate-950 text-slate-400 border-slate-700'
+                  }`}
+                >
+                  {autoConvertToUsdt ? 'AUTO-USDT: ACTIVO' : 'AUTO-USDT: PAUSADO'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                <div className="space-y-4">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                    <QrCode className="w-4 h-4" />
+                    Cuentas Cripto Receptoras (USDT / Bitcoin BTC)
+                  </h3>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-300 font-medium">
+                      Canal Principal de Liquidación en la Bóveda
+                    </label>
+                    <select
+                      value={primarySettlementRail}
+                      onChange={e => setPrimarySettlementRail(e.target.value as PrimarySettlementRail)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-amber-300 font-bold text-xs focus:outline-none focus:border-amber-500"
+                    >
+                      <option value="USDT">USDT Directo (TRC-20 / BEP-20 / ERC-20)</option>
+                      <option value="BTC">Bitcoin (BTC Native SegWit)</option>
+                      <option value="PAYPAL_BUSINESS">PayPal Business</option>
+                      <option value="BANK_WIRE">Transferencia Bancaria IBAN / SWIFT</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-300 font-medium">
+                      Dirección USDT (Red TRC-20 Tron - Bajas Comisiones)
+                    </label>
+                    <input
+                      type="text"
+                      value={trc20}
+                      onChange={e => setTrc20(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs focus:outline-none focus:border-amber-500"
+                      placeholder="TRX..."
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-300 font-medium">
+                      Dirección USDT / USDC (Red ERC-20 Ethereum)
+                    </label>
+                    <input
+                      type="text"
+                      value={erc20}
+                      onChange={e => setErc20(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs focus:outline-none focus:border-amber-500"
+                      placeholder="0x..."
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-300 font-medium">
+                      Dirección USDT (Red BEP-20 BNB Smart Chain)
+                    </label>
+                    <input
+                      type="text"
+                      value={bep20}
+                      onChange={e => setBep20(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs focus:outline-none focus:border-amber-500"
+                      placeholder="0x..."
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-300 font-medium">
+                      Dirección Bitcoin (BTC Native SegWit / BTCPay)
+                    </label>
+                    <input
+                      type="text"
+                      value={btcAddress}
+                      onChange={e => setBtcAddress(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-amber-200 font-mono text-xs focus:outline-none focus:border-amber-500"
+                      placeholder="bc1q..."
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-300 font-medium">
+                      Binance Pay Merchant ID (Opcional — solo cuentas Merchant)
+                    </label>
+                    <input
+                      type="text"
+                      value={binancePayId}
+                      onChange={e => setBinancePayId(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs focus:outline-none focus:border-amber-500"
+                      placeholder="Solo ID comercial verificado (evitar usar Binance personal directo)"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
+                    <Building2 className="w-4 h-4" />
+                    PayPal, Pasarela de Tarjetas & Cuentas Bancarias
+                  </h3>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-300 font-medium">
+                      Pasarela de Tarjeta Crédito / Débito → Crypto / Bóveda
+                    </label>
+                    <select
+                      value={cardGatewayProvider}
+                      onChange={e => setCardGatewayProvider(e.target.value as CardGatewayProvider)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-cyan-300 font-bold text-xs focus:outline-none focus:border-cyan-500"
+                    >
+                      <option value="NOWPAYMENTS_CARD_TO_CRYPTO">NOWPayments / Banxa (Tarjeta Visa/MC → USDT/BTC directo)</option>
+                      <option value="BTCPAY_SERVER">BTCPay Server (Autoalojado en VPS Debian 13, 0% comisión)</option>
+                      <option value="MOONPAY_ONRAMP">MoonPay / Transak (On-Ramp Fiat → Wallet sin retenciones)</option>
+                      <option value="PAYPAL_BUSINESS">PayPal Business Checkout (Créditos Digitales)</option>
+                      <option value="STRIPE_DIGITAL">Stripe Merchant (Solo Entidad Registrada)</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-300 font-medium">
+                      Nombre de la Bóveda / Comerciante
+                    </label>
+                    <input
+                      type="text"
+                      value={merchant}
+                      onChange={e => setMerchant(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div className="sm:col-span-2 space-y-1.5">
+                      <label className="text-xs text-slate-300 font-medium">
+                        Correo Electrónico PayPal
+                      </label>
+                      <input
+                        type="email"
+                        value={paypal}
+                        onChange={e => setPaypal(e.target.value)}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs focus:outline-none focus:border-cyan-500"
+                        placeholder="pagos@tuempresa.com"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-slate-300 font-medium">
+                        Tipo Cuenta
+                      </label>
+                      <select
+                        value={paypalMode}
+                        onChange={e => setPaypalMode(e.target.value as 'BUSINESS' | 'PERSONAL')}
+                        className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-300 font-bold text-xs focus:outline-none focus:border-cyan-500"
+                      >
+                        <option value="BUSINESS">Business</option>
+                        <option value="PERSONAL">Personal</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-300 font-medium">
+                      IBAN Bancario Internacional & Código SWIFT/BIC
+                    </label>
+                    <input
+                      type="text"
+                      value={iban}
+                      onChange={e => setIban(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs focus:outline-none focus:border-cyan-500"
+                      placeholder="ES..."
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-300 font-medium">
+                      Nombre del Titular de la Cuenta
+                    </label>
+                    <input
+                      type="text"
+                      value={holder}
+                      onChange={e => setHolder(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-cyan-950/30 border border-cyan-500/30 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-bold text-cyan-300">Modo Pruebas Virtual (Máx. 10 Testers)</div>
+                      <div className="text-[11px] text-slate-400">Habilita tester01..tester10 y captura continua de logs QA</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setVmTestModeEnabled(v => !v)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-black border shrink-0 ${
+                        vmTestModeEnabled
+                          ? 'bg-cyan-500 text-slate-950 border-cyan-400'
+                          : 'bg-slate-950 text-slate-400 border-slate-700'
+                      }`}
+                    >
+                      {vmTestModeEnabled ? 'VM QA: ON (10)' : 'VM QA: OFF'}
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Advisory Panel: Anti-Freeze & Virtual Visa/Mastercard Guide */}
+              <div className="p-4 rounded-2xl bg-slate-950 border border-amber-500/30 space-y-2.5 text-xs">
+                <div className="font-bold text-amber-300 flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4" />
+                  Recomendación de Pasarelas Anti-Congelamiento & Tarjeta Virtual Visa/Mastercard
+                </div>
+                <ul className="space-y-1.5 text-slate-300 text-[11px] leading-relaxed list-disc pl-4">
+                  <li>
+                    <strong>Binance Personal:</strong> NO conectes tu Binance personal directamente como checkout comercial del juego (Binance detecta depósitos de terceros y puede congelar cuentas personales). Úsalo solo como cartera final receptora desde una pasarela o solicita <em>Binance Pay Merchant</em>.
+                  </li>
+                  <li>
+                    <strong>PayPal Business vs Personal:</strong> Nunca uses PayPal Personal para cobros comerciales (congelamiento casi inmediato). <strong>PayPal Business</strong> es superior, pero restringe juegos de azar; mantenlo solo como respaldo para paquetes digitales y retira saldos rápido.
+                  </li>
+                  <li>
+                    <strong>Mejor Ruta Sin Congelamientos (BTC / USDT + Tarjetas):</strong> Usa <strong>BTCPay Server</strong> (instalable en tu mismo VPS Debian 13, 0% comisión y custodia propia) junto con un procesador fiat-a-crypto (<strong>NOWPayments / MoonPay / Transak</strong>) para que los clientes paguen con Visa/Mastercard y a ti te caiga liquidado directamente en <strong>USDT / BTC</strong>.
+                  </li>
+                  <li>
+                    <strong>Tarjeta Virtual Visa / Mastercard:</strong> Una vez recibas tus fondos en USDT/BTC (o fiat empresarial), puedes usar emisores regulados compatibles con tu país como <strong>RedotPay, Bybit Card, BitPay Card o Wise Business</strong> para gastar con tarjeta virtual Visa/Mastercard.
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </form>
+
+          {/* Live USDT Incoming Purchase Orders Ledger */}
+          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
               <div>
-                <h2 className="text-lg font-bold text-slate-100 font-display">
-                  Destinos de Cobro del Administrador
-                </h2>
+                <h3 className="text-base font-bold text-slate-100 font-display flex items-center gap-2">
+                  <Coins className="w-4 h-4 text-emerald-400" />
+                  <span>Órdenes de Compra & Depósitos Enrutados a tu Cuenta USDT</span>
+                </h3>
                 <p className="text-xs text-slate-400">
-                  Configura tus cuentas bancarias y billeteras de criptomonedas donde se reciben los fondos de los jugadores.
+                  Registro persistente en servidor con bloqueo anti-reutilización de TXID (SHA-256 unique digest).
                 </p>
               </div>
-              <button
-                type="submit"
-                className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 text-slate-950 font-extrabold text-xs rounded-xl shadow transition-all active:scale-95 flex items-center gap-1.5"
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>{isSaved ? '¡Guardado con Éxito!' : 'Guardar y Activar Bóvedas'}</span>
-              </button>
+              {authToken && (
+                <button
+                  type="button"
+                  onClick={fetchUsdtOrders}
+                  disabled={isLoadingUsdtOrders}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition self-start"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingUsdtOrders ? 'animate-spin' : ''}`} />
+                  <span>Refrescar Órdenes</span>
+                </button>
+              )}
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              
-              <div className="space-y-4">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
-                  <QrCode className="w-4 h-4" />
-                  Billeteras Cripto para Cobros (USDT / USDC)
-                </h3>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs text-slate-300 font-medium">
-                    Dirección USDT (Red TRC-20 Tron - Bajas Comisiones)
-                  </label>
-                  <input
-                    type="text"
-                    value={trc20}
-                    onChange={e => setTrc20(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs focus:outline-none focus:border-amber-500"
-                    placeholder="TRX..."
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs text-slate-300 font-medium">
-                    Dirección USDT / USDC (Red ERC-20 / Polygon)
-                  </label>
-                  <input
-                    type="text"
-                    value={erc20}
-                    onChange={e => setErc20(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs focus:outline-none focus:border-amber-500"
-                    placeholder="0x..."
-                  />
-                </div>
+            {!authToken ? (
+              <div className="p-4 rounded-xl bg-slate-950 border border-amber-500/30 text-xs text-amber-200">
+                Inicia sesión o emite tu Token Seguro en la pestaña <strong>Seguridad App & BD</strong> para inspeccionar y auditar las órdenes USDT del servidor.
               </div>
-
-              <div className="space-y-4">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
-                  <Building2 className="w-4 h-4" />
-                  Cuentas Fiat (Bancos & PayPal)
-                </h3>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs text-slate-300 font-medium">
-                    Correo Electrónico de PayPal Comercial
-                  </label>
-                  <input
-                    type="email"
-                    value={paypal}
-                    onChange={e => setPaypal(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs focus:outline-none focus:border-cyan-500"
-                    placeholder="pagos@tuempresa.com"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs text-slate-300 font-medium">
-                    IBAN Bancario Internacional & Código SWIFT/BIC
-                  </label>
-                  <input
-                    type="text"
-                    value={iban}
-                    onChange={e => setIban(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs focus:outline-none focus:border-cyan-500"
-                    placeholder="ES..."
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs text-slate-300 font-medium">
-                    Nombre del Titular de la Cuenta
-                  </label>
-                  <input
-                    type="text"
-                    value={holder}
-                    onChange={e => setHolder(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs focus:outline-none focus:border-cyan-500"
-                  />
-                </div>
+            ) : usdtOrders.length === 0 ? (
+              <div className="p-6 rounded-xl bg-slate-950/60 border border-slate-800 text-center text-xs text-slate-400">
+                Aún no hay órdenes de compra USDT registradas en la base de datos. Compra un paquete en la Tienda para probar el flujo completo.
               </div>
-
-            </div>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/70">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-slate-400 text-[10px] uppercase tracking-wider">
+                      <th className="py-2.5 px-3">Orden</th>
+                      <th className="py-2.5 px-3">Usuario</th>
+                      <th className="py-2.5 px-3">Paquete / Monedas</th>
+                      <th className="py-2.5 px-3">Red / Wallet Destino</th>
+                      <th className="py-2.5 px-3">TXID (Descifrado)</th>
+                      <th className="py-2.5 px-3">Estado</th>
+                      <th className="py-2.5 px-3 text-right">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 font-mono-numbers">
+                    {usdtOrders.map(ord => (
+                      <tr key={ord.id} className="hover:bg-slate-900/60">
+                        <td className="py-2.5 px-3 text-slate-300 font-mono">
+                          #{ord.id.slice(-6)}
+                        </td>
+                        <td className="py-2.5 px-3 text-cyan-300 truncate max-w-[140px]">
+                          {ord.userEmail}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="font-bold text-emerald-400">${ord.priceUSD} USD</div>
+                          <div className="text-[10px] text-amber-300">+{ord.coinsAmount.toLocaleString()} mo</div>
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                            USDT {ord.usdtNetwork}
+                          </span>
+                          <div className="text-[10px] text-slate-400 font-mono truncate max-w-[130px] mt-0.5">
+                            {ord.destinationUsdtWallet}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 font-mono text-[10px] text-slate-300 truncate max-w-[140px]" title={ord.txHash || ''}>
+                          {ord.txHash || 'Pendiente TX'}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                              ord.status === 'VERIFIED_SETTLED'
+                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                                : ord.status === 'REJECTED'
+                                ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                                : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                            }`}
+                          >
+                            {ord.status}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                          {ord.status === 'PENDING_TX' && (
+                            <div className="inline-flex gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleReviewUsdtOrder(ord.id, 'VERIFIED_SETTLED')}
+                                className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold"
+                              >
+                                Aprobar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleReviewUsdtOrder(ord.id, 'REJECTED')}
+                                className="px-2 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-bold"
+                              >
+                                Rechazar
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        </form>
+        </div>
       )}
 
       {/* TAB 3: WITHDRAWAL FORM */}
@@ -2682,6 +3743,200 @@ export const AdminPanel: React.FC = () => {
         );
       })()}
 
+      {/* TAB: VM QA EXPERIENCE LOGS & 10 TESTERS SANDBOX */}
+      {activeTab === 'vm_qa_logs' && (
+        <div className="space-y-6 animate-in fade-in duration-300">
+          <div className="p-6 rounded-3xl bg-slate-900 border border-cyan-500/30 space-y-5 shadow-xl">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+              <div>
+                <h2 className="text-xl font-bold text-slate-100 font-display flex items-center gap-2">
+                  <Activity className="w-5 h-5 text-cyan-400" />
+                  <span>Bitácora de Experiencia VM & 10 Testers Simultáneos</span>
+                </h2>
+                <p className="text-xs text-slate-400 mt-1 max-w-2xl">
+                  Registra cada partida, pago, fallo de JavaScript o reporte de tus 10 testers en máquina virtual. Exporta el reporte completo para depurar cualquier inconveniente antes de subir al VPS.
+                </p>
+              </div>
+              {authToken && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={fetchVmExperienceLogs}
+                    disabled={isLoadingVmLogs}
+                    className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingVmLogs ? 'animate-spin' : ''}`} />
+                    <span>Refrescar</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportVmReport}
+                    className="px-3.5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-black flex items-center gap-1.5"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Descargar Reporte (.json)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearVmLogs}
+                    className="px-3 py-2 rounded-xl bg-rose-950/60 hover:bg-rose-900/60 border border-rose-500/40 text-rose-200 text-xs font-bold"
+                  >
+                    Limpiar Logs
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {!authToken ? (
+              <div className="p-5 rounded-2xl bg-slate-950 border border-amber-500/30 text-xs text-amber-200">
+                Inicia sesión con tu clave de propietario en <strong>Seguridad App & BD</strong> o desde el botón de sesión para administrar los 10 testers y descargar los logs del servidor.
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] uppercase tracking-wider text-slate-400 block">Cupo Testers VM</span>
+                    <div className="text-lg font-black text-cyan-300 font-mono-numbers">
+                      {vmLogsSummary.activeTestersCount} / {vmLogsSummary.maxVmTesters}
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] uppercase tracking-wider text-slate-400 block">Experiencias Guardadas</span>
+                    <div className="text-lg font-black text-emerald-400 font-mono-numbers">{vmLogsSummary.totalLogs}</div>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] uppercase tracking-wider text-slate-400 block">Errores Capturados</span>
+                    <div className="text-lg font-black text-rose-400 font-mono-numbers">{vmLogsSummary.errorsCount}</div>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] uppercase tracking-wider text-slate-400 block">Reportes de Fallos</span>
+                    <div className="text-lg font-black text-amber-400 font-mono-numbers">{vmLogsSummary.bugReportsCount}</div>
+                  </div>
+                </div>
+
+                {/* 10 VM Tester Accounts Grid */}
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
+                      <Users className="w-4 h-4" />
+                      10 Cuentas Aisladas para Pruebas en Máquina Virtual (Clave: vmtest2026)
+                    </h3>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+                    {vmTesters.map(tester => (
+                      <div
+                        key={tester.id}
+                        className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono font-bold text-cyan-200 truncate">
+                            {tester.email.split('@')[0]}
+                          </span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                            {tester.isActive ? 'ACTIVO' : 'INACTIVO'}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-amber-300 font-mono-numbers">
+                          {tester.coinsBalance.toLocaleString()} mo ($5,000)
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleResetVmTester(tester.email)}
+                          className="w-full py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-[10px] font-bold text-slate-200 transition"
+                        >
+                          Reiniciar Saldo QA
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Filter Bar */}
+                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800">
+                  {(['ALL', 'ERROR', 'BUG_REPORT', 'WARN', 'INFO'] as const).map(sev => (
+                    <button
+                      key={sev}
+                      type="button"
+                      onClick={() => setVmLogSeverityFilter(sev)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                        vmLogSeverityFilter === sev
+                          ? 'bg-cyan-500 text-slate-950'
+                          : 'bg-slate-950 border border-slate-800 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      {sev === 'ALL' ? 'Todos los Eventos' : sev}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Experience Logs Table */}
+                <div className="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-950/70">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400 text-[10px] uppercase tracking-wider">
+                        <th className="py-2.5 px-3">Hora</th>
+                        <th className="py-2.5 px-3">Usuario</th>
+                        <th className="py-2.5 px-3">Módulo / Juego</th>
+                        <th className="py-2.5 px-3">Severidad</th>
+                        <th className="py-2.5 px-3">Experiencia / Detalle</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {vmLogs.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="py-6 text-center text-slate-500">
+                            Sin registros todavía. Conecta a cualquiera de tus 10 testers o juega una partida para ver los logs en tiempo real.
+                          </td>
+                        </tr>
+                      ) : (
+                        vmLogs.map(item => (
+                          <tr key={item.id} className="hover:bg-slate-900/60">
+                            <td className="py-2.5 px-3 text-slate-400 whitespace-nowrap font-mono text-[11px]">
+                              {new Date(item.timestamp).toLocaleTimeString()}
+                            </td>
+                            <td className="py-2.5 px-3 text-cyan-300 font-mono truncate max-w-[140px]">
+                              {item.userEmail}
+                            </td>
+                            <td className="py-2.5 px-3 whitespace-nowrap">
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 font-mono">
+                                {item.gameName} ({item.category})
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 whitespace-nowrap">
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                                  item.severity === 'ERROR'
+                                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                                    : item.severity === 'BUG_REPORT'
+                                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                    : item.severity === 'WARN'
+                                    ? 'bg-yellow-500/15 text-yellow-300 border-yellow-500/30'
+                                    : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                }`}
+                              >
+                                {item.severity}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-200 max-w-md">
+                              <div className="font-medium">{item.summary}</div>
+                              {item.detailsJson && item.detailsJson !== '{}' && (
+                                <div className="text-[10px] font-mono text-slate-400 truncate max-w-md" title={item.detailsJson}>
+                                  {item.detailsJson}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* TAB: APP & DATABASE SECURITY HARDENING */}
       {activeTab === 'security_hardening' && (
         <div className="space-y-6 animate-in fade-in duration-300">
@@ -2776,8 +4031,8 @@ export const AdminPanel: React.FC = () => {
                   </div>
                 )}
 
-                {/* Integrity & Rate Limiter KPI Cards */}
-                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                {/* Integrity, WAF, CSRF & Rate Limiter KPI Cards */}
+                <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
                   <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-1">
                     <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Integridad SQLite</span>
                     <div className={`text-base font-black font-mono ${securityStatus?.integrity.sqliteOk ? 'text-emerald-400' : 'text-amber-300'}`}>
@@ -2791,9 +4046,15 @@ export const AdminPanel: React.FC = () => {
                     </div>
                   </div>
                   <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-1">
-                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Registros Auditados</span>
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Score Vulnerabilidades</span>
+                    <div className="text-base font-black text-emerald-400 font-mono-numbers">
+                      {securityStatus?.vulnerabilityScan ? `${securityStatus.vulnerabilityScan.scorePercent}%` : '—'}
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-1">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Bloqueos WAF / CSRF</span>
                     <div className="text-base font-black text-cyan-300 font-mono-numbers">
-                      {securityStatus?.integrity.checkedRows ?? '—'}
+                      {(securityStatus?.rateStats.wafBlockedCount ?? 0) + (securityStatus?.rateStats.csrfBlockedCount ?? 0)}
                     </div>
                   </div>
                   <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-1">
@@ -2809,6 +4070,43 @@ export const AdminPanel: React.FC = () => {
                     </div>
                   </div>
                 </div>
+
+                {/* Live Vulnerability Self-Scan Checklist (VM -> VPS) */}
+                {securityStatus?.vulnerabilityScan && (
+                  <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800">
+                      <div className="flex items-center gap-2 text-xs font-bold text-slate-100">
+                        <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                        <span>Escáner de Vulnerabilidades App & Servidor</span>
+                      </div>
+                      <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                        Entorno: {securityStatus.vulnerabilityScan.environmentMode === 'VM_SANDBOX' ? 'PRUEBAS VIRTUAL / DEV' : 'VPS PRODUCCIÓN'}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                      {securityStatus.vulnerabilityScan.checks.map(chk => (
+                        <div
+                          key={chk.id}
+                          className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 ${
+                            chk.status === 'PASS'
+                              ? 'bg-emerald-950/20 border-emerald-500/30'
+                              : 'bg-amber-950/20 border-amber-500/40'
+                          }`}
+                        >
+                          {chk.status === 'PASS' ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                          ) : (
+                            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                          )}
+                          <div>
+                            <div className="font-bold text-slate-200">{chk.name}</div>
+                            <div className="text-[11px] text-slate-400 mt-0.5">{chk.detail}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Hardening Layers Matrix */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -2832,15 +4130,15 @@ export const AdminPanel: React.FC = () => {
                       icon: ShieldCheck
                     },
                     {
-                      title: 'Defensa SQL Injection & XSS',
-                      value: securityStatus?.hardening.sqlInjectionProtection || 'Consultas Parametrizadas',
-                      desc: 'Sentencias preparadas estrictas, sanitización anti-Prototype-Pollution y cabeceras CSP/NoSniff/HSTS.',
+                      title: 'WAF Anti-SQLi / XSS / CSRF',
+                      value: securityStatus?.hardening.sqlInjectionProtection || 'Prepared SQL + WAF Sensor',
+                      desc: 'Detección de inyección SQL/XSS, Path Traversal, bloqueo TRACE/TRACK y validación Origin CSRF.',
                       icon: Lock
                     },
                     {
-                      title: 'Rate Limiter & Anti-Brute-Force',
-                      value: securityStatus?.hardening.rateLimiter || 'Ventana Deslizante + Lockout',
-                      desc: 'Bloqueo automático de 15 minutos tras 5 intentos fallidos y límite estricto por dirección IP.',
+                      title: 'Rate Limiter & Anti-Replay',
+                      value: securityStatus?.hardening.rateLimiter || 'Ventana Deslizante + Índice Único',
+                      desc: 'Bloqueo 15 min tras 5 fallos, límite estricto por IP e índice UNIQUE contra doble gasto TXID USDT.',
                       icon: ShieldAlert
                     },
                     {
@@ -2936,6 +4234,271 @@ export const AdminPanel: React.FC = () => {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* TAB: EXCLUSIVE VAULT CONFIG PANEL (APIS + WITHDRAWAL ACCOUNTS) */}
+      {activeTab === 'vault_apis' && <VaultConfigPanel />}
+
+      {/* TAB: FULL AUDIT TRAIL (FINANCIAL + API CONFIG + AUTHORIZATION) */}
+      {activeTab === 'audit_trail' && <AuditTrail />}
+
+      {/* TAB: EXECUTIVE SUMMARY, CONVERSATION HISTORY & EMAIL DELIVERY */}
+      {activeTab === 'executive_summary' && (
+        <div className="space-y-6 animate-in fade-in duration-300">
+          <div className="p-6 rounded-3xl bg-slate-900 border border-cyan-500/30 space-y-5 shadow-xl">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+              <div>
+                <h2 className="text-xl font-bold text-slate-100 font-display flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-cyan-400" />
+                  Resumen Ejecutivo Completo + Historial de Conversación
+                </h2>
+                <p className="text-xs text-slate-400 mt-1">
+                  Generado directamente desde la base de datos SQLite para descarga local o envío directo al correo del propietario (<strong>{OWNER_EMAIL}</strong>).
+                </p>
+              </div>
+              {authToken && (
+                <button
+                  type="button"
+                  onClick={fetchFullSummary}
+                  disabled={isLoadingFullSummary}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition self-start"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFullSummary ? 'animate-spin' : ''}`} />
+                  <span>Actualizar Reporte</span>
+                </button>
+              )}
+            </div>
+
+            {!authToken ? (
+              <div className="p-6 rounded-2xl bg-slate-950/90 border border-amber-500/40 space-y-4">
+                <p className="text-xs text-slate-300">
+                  Valida tu Clave Maestra de Propietario ({OWNER_EMAIL}) para generar el resumen consolidado con métricas en vivo e historial completo.
+                </p>
+                <form
+                  onSubmit={async e => {
+                    e.preventDefault();
+                    if (!serverMasterKeyInput.trim()) return;
+                    const ok = await loginOwnerWithKey(serverMasterKeyInput.trim());
+                    if (ok) setServerMasterKeyInput('');
+                  }}
+                  className="flex flex-col sm:flex-row gap-2 max-w-xl"
+                >
+                  <input
+                    type="password"
+                    value={serverMasterKeyInput}
+                    onChange={e => setServerMasterKeyInput(e.target.value)}
+                    placeholder="Ingresa la Clave Maestra del Propietario..."
+                    className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-slate-100 focus:outline-none focus:border-amber-400 font-mono"
+                  />
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs uppercase tracking-wider transition"
+                  >
+                    Generar Resumen
+                  </button>
+                </form>
+              </div>
+            ) : !fullSummary ? (
+              <div className="p-8 text-center text-xs text-slate-400">Cargando resumen consolidado desde el servidor...</div>
+            ) : (
+              <div className="space-y-5">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                  <div className="p-3 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-0.5">
+                    <span className="text-[10px] text-slate-400 uppercase block">Órdenes Totales</span>
+                    <div className="text-lg font-bold text-slate-100 font-mono-numbers">{fullSummary.metrics.totalOrders}</div>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-slate-950/80 border border-emerald-500/30 space-y-0.5">
+                    <span className="text-[10px] text-emerald-300 uppercase block">Liquidadas</span>
+                    <div className="text-lg font-bold text-emerald-400 font-mono-numbers">{fullSummary.metrics.settledOrders}</div>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-slate-950/80 border border-amber-500/30 space-y-0.5">
+                    <span className="text-[10px] text-amber-300 uppercase block">Volumen Liquidado</span>
+                    <div className="text-lg font-bold text-amber-400 font-mono-numbers">${fullSummary.metrics.settledVolumeUSD.toFixed(2)}</div>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-slate-950/80 border border-cyan-500/30 space-y-0.5">
+                    <span className="text-[10px] text-cyan-300 uppercase block">Testers VM</span>
+                    <div className="text-lg font-bold text-cyan-300 font-mono-numbers">{fullSummary.metrics.vmTestersCount} / 10</div>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-slate-950/80 border border-emerald-500/30 space-y-0.5">
+                    <span className="text-[10px] text-emerald-300 uppercase block">Score Seguridad</span>
+                    <div className="text-lg font-bold text-emerald-400 font-mono-numbers">{fullSummary.metrics.securityScore}%</div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-2xl bg-slate-950/90 border border-slate-800">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const blob = new Blob([fullSummary.markdownReport], { type: 'text/markdown;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `aethervault-resumen-completo-${new Date().toISOString().slice(0, 10)}.md`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        soundFx.playCoinChime();
+                        addNotification('Resumen Descargado', 'Documento Markdown con el resumen e historial completo descargado.', 'success');
+                      }}
+                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 shadow"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Descargar Resumen (.md)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(fullSummary.markdownReport);
+                        soundFx.playClick();
+                        addNotification('Resumen Copiado', 'Todo el resumen y el historial de conversación copiados al portapapeles.', 'info');
+                      }}
+                      className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-700 flex items-center gap-1.5"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copiar Todo</span>
+                    </button>
+                  </div>
+
+                  {/* Google Sign-In & Direct Gmail Send Controls */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {!isGmailConnected ? (
+                      <button
+                        type="button"
+                        onClick={handleConnectGmail}
+                        disabled={isConnectingGmail}
+                        className="inline-flex items-center gap-2.5 px-4 py-2 rounded-full bg-white hover:bg-slate-100 text-slate-900 font-medium text-xs shadow border border-slate-300 transition active:scale-95 disabled:opacity-60"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
+                          <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+                          <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+                          <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+                          <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+                        </svg>
+                        <span>{isConnectingGmail ? 'Conectando...' : 'Sign in with Google'}</span>
+                      </button>
+                    ) : (
+                      <>
+                        <span className="text-[11px] font-mono px-2.5 py-1 rounded-lg bg-emerald-950/50 border border-emerald-500/30 text-emerald-300">
+                          Gmail: {gmailUserEmail || OWNER_EMAIL}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setShowGmailConfirmModal(true)}
+                          className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 text-white font-black text-xs flex items-center gap-1.5 shadow-lg transition active:scale-95"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          <span>Enviar a {OWNER_EMAIL}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await logoutGmail();
+                            setIsGmailConnected(false);
+                            setGmailUserEmail(null);
+                          }}
+                          className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold border border-slate-700"
+                        >
+                          Desconectar
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {gmailSendFeedback && (
+                  <div
+                    className={`p-3.5 rounded-xl border text-xs flex items-center gap-2 ${
+                      gmailSendFeedback.ok
+                        ? 'bg-emerald-950/50 border-emerald-500/40 text-emerald-200'
+                        : 'bg-rose-950/50 border-rose-500/40 text-rose-200'
+                    }`}
+                  >
+                    {gmailSendFeedback.ok ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                    )}
+                    <span>{gmailSendFeedback.message}</span>
+                  </div>
+                )}
+
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 max-h-[460px] overflow-y-auto">
+                  <pre className="text-xs text-slate-200 font-mono whitespace-pre-wrap leading-relaxed">
+                    {fullSummary.markdownReport}
+                  </pre>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Explicit Confirmation Modal Before Sending Email via Gmail */}
+      {showGmailConfirmModal && fullSummary && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg rounded-3xl bg-slate-900 border border-cyan-500/40 p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-cyan-500/15 border border-cyan-500/30">
+                  <Mail className="w-5 h-5 text-cyan-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-100">Confirmar Envío de Resumen por Gmail</h3>
+                  <p className="text-[11px] text-slate-400">Esta acción enviará un correo real desde tu cuenta autorizada.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowGmailConfirmModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-400">Destinatario:</span>
+                <span className="font-mono font-bold text-emerald-300">{OWNER_EMAIL}</span>
+              </div>
+              <div className="flex items-start justify-between gap-2">
+                <span className="text-slate-400 shrink-0">Asunto:</span>
+                <span className="font-medium text-slate-200 text-right">{fullSummary.subject}</span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-400">Contenido incluido:</span>
+                <span className="text-cyan-300 font-semibold">Resumen Completo + Historial (10 pasos)</span>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-slate-300 leading-relaxed">
+              ¿Deseas enviar ahora el resumen ejecutivo completo junto con el historial cronológico de la conversación y métricas de bóveda a <strong>{OWNER_EMAIL}</strong>?
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowGmailConfirmModal(false)}
+                disabled={isSendingEmail}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmSendGmail}
+                disabled={isSendingEmail}
+                className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 text-white text-xs font-black flex items-center gap-1.5 shadow-lg disabled:opacity-60"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>{isSendingEmail ? 'Enviando correo...' : 'Confirmar y Enviar Correo'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

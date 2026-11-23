@@ -12,15 +12,179 @@ export interface MultiplayerTableSeat {
   score?: number;
 }
 
+export type UsdtNetwork = 'TRC20' | 'ERC20' | 'BEP20';
+
+export type PrimarySettlementRail = 'USDT' | 'BTC' | 'PAYPAL_BUSINESS' | 'BANK_WIRE';
+export type CardGatewayProvider =
+  | 'NOWPAYMENTS_CARD_TO_CRYPTO'
+  | 'BTCPAY_SERVER'
+  | 'MOONPAY_ONRAMP'
+  | 'TRANSAK_ONRAMP'
+  | 'BANXA_ONRAMP'
+  | 'COINGATE_CRYPTO'
+  | 'STRIPE_DIGITAL'
+  | 'PAYPAL_BUSINESS';
+
+export type OnRampProvider = 'NOWPAYMENTS_FIAT' | 'MOONPAY' | 'TRANSAK' | 'BANXA';
+export type VirtualCardBrand = 'REDOTPAY' | 'BYBIT' | 'BITPAY' | 'WISE';
+
+export interface VaultGatewayApisConfig {
+  btcpay: {
+    enabled: boolean;
+    serverUrl: string;
+    storeId: string;
+    apiKey: string;
+    webhookSecret: string;
+  };
+  nowpayments: {
+    enabled: boolean;
+    apiKey: string;
+    ipnSecret: string;
+    sandbox: boolean;
+  };
+  coingate: {
+    enabled: boolean;
+    apiToken: string;
+    environment: 'sandbox' | 'live';
+  };
+  paypal: {
+    enabled: boolean;
+    environment: 'sandbox' | 'live';
+    clientId: string;
+    clientSecret: string;
+    webhookId: string;
+    merchantEmail: string;
+  };
+  onramps: {
+    activeProvider: OnRampProvider;
+    moonpayPublicKey: string;
+    moonpaySecretKey: string;
+    transakApiKey: string;
+    transakEnvironment: 'STAGING' | 'PRODUCTION';
+    banxaDomain: string;
+    banxaApiKey: string;
+    banxaSecret: string;
+  };
+  virtualCards: {
+    preferredBrand: VirtualCardBrand;
+    redotpayAccountId: string;
+    redotpayDepositWallet: string;
+    redotpayCardLabel: string;
+    redotpayApiKey: string;
+    bybitUid: string;
+    bybitDepositAddress: string;
+    bybitCardLabel: string;
+    bybitApiKey: string;
+    bitpayMerchantToken: string;
+    bitpayPayoutEmail: string;
+    bitpayCardLabel: string;
+    wiseBusinessEmail: string;
+    wiseProfileId: string;
+    wiseIbanOrRouting: string;
+    wiseApiToken: string;
+  };
+}
+
+export interface GatewayPublicAvailability {
+  btcpayConfigured: boolean;
+  btcpayServerUrl: string;
+  nowpaymentsConfigured: boolean;
+  coingateConfigured: boolean;
+  paypalConfigured: boolean;
+  paypalEnvironment: 'sandbox' | 'live';
+  activeOnRamp: OnRampProvider;
+  onRampConfigured: boolean;
+  preferredVirtualCard: VirtualCardBrand;
+}
+
 export interface PayoutDestinationConfig {
   merchantName: string;
   usdtTrc20Address: string;
   usdtErc20Address: string;
+  usdtBep20Address?: string;
+  btcAddress?: string;
+  binancePayId?: string;
   paypalEmail: string;
+  paypalMode?: 'BUSINESS' | 'PERSONAL';
+  cardGatewayProvider?: CardGatewayProvider;
+  primarySettlementRail?: PrimarySettlementRail;
   bankIbanSwift: string;
   bankAccountHolder: string;
   stripeAccountId: string;
   autoForwardToWallet: boolean;
+  autoConvertToUsdt?: boolean;
+  vmTestModeEnabled?: boolean;
+  maxVmTesters?: number;
+}
+
+export interface CoinPurchaseOrder {
+  id: string;
+  userEmail: string;
+  tierLevel: number;
+  tierName: string;
+  coinsAmount: number;
+  priceUSD: number;
+  paymentMethod: PaymentMethodType;
+  usdtNetwork: UsdtNetwork;
+  destinationUsdtWallet: string;
+  txHash?: string;
+  gatewayProvider?: string;
+  gatewayInvoiceId?: string;
+  checkoutUrl?: string;
+  isLiveApi?: boolean;
+  status: 'PENDING_TX' | 'VERIFIED_SETTLED' | 'REJECTED';
+  autoSettledToUsdt: boolean;
+  createdAt: number;
+  settledAt?: number;
+}
+
+export interface BtcpayWebhookEventRecord {
+  id: string;
+  deliveryId: string;
+  invoiceId: string;
+  eventType: 'InvoiceSettled' | 'InvoicePaymentSettled' | 'InvoiceProcessing' | 'InvoiceExpired' | 'InvoiceInvalid' | 'ManualTest';
+  userEmail: string;
+  coinsCredited: number;
+  amountUSD: number;
+  blockchainConfirmed: boolean;
+  signatureVerified: boolean;
+  firestoreSynced: boolean;
+  firestoreSyncedAt?: number;
+  rawSummary: string;
+  createdAt: number;
+}
+
+export interface DeterministicRecommendation {
+  id: string;
+  category: 'WEBHOOKS' | 'DATABASE' | 'ANTI_FREEZE' | 'SECURITY' | 'VIRTUAL_CARDS' | 'PAYPAL';
+  status: 'OPTIMAL' | 'ACTION_REQUIRED' | 'RECOMMENDED';
+  title: string;
+  ruleTrigger: string;
+  recommendation: string;
+  actionHint: string;
+}
+
+export interface VmExperienceLog {
+  seq?: number;
+  id: string;
+  timestamp: number;
+  userEmail: string;
+  sessionId: string;
+  category: 'GAME_ACTION' | 'PAYMENT_FLOW' | 'AUTH_EVENT' | 'UI_ERROR' | 'API_ERROR' | 'USER_FEEDBACK' | 'SYSTEM';
+  gameName: string;
+  severity: 'INFO' | 'WARN' | 'ERROR' | 'BUG_REPORT';
+  summary: string;
+  detailsJson: string;
+  ipAddress?: string;
+}
+
+export interface VmTesterSlot {
+  id: string;
+  email: string;
+  displayName: string;
+  isActive: boolean;
+  coinsBalance: number;
+  lastSeenAt: number;
 }
 
 export interface AdminWithdrawalRecord {
@@ -37,6 +201,10 @@ export interface PlayerRedemptionRequest {
   id: string;
   playerEmail: string;
   playerName: string;
+  balanceBeforeCoins?: number;
+  maxAllowed30PctCoins?: number;
+  requestedOriginalCoins?: number;
+  cappedAutomatically?: boolean;
   amountCoins: number;
   grossUSD: number;
   feeUSD: number; // 20% commission that goes directly to Owner's Vault
@@ -44,10 +212,50 @@ export interface PlayerRedemptionRequest {
   destinationType: 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire';
   destinationAddress: string;
   status: 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED';
+  awaitingAuthorization: boolean;
+  authorizedByEmail?: string;
   timestamp: number;
   reviewedAt?: number;
   rejectionReason?: string;
   txHash: string;
+  payoutStatus?: string;
+  externalPayoutId?: string;
+  firestoreSynced?: boolean;
+}
+
+export interface EconomyConfig {
+  vaultRetentionPct: number;
+  redemptionFeePct: number;
+  transferFeePct: number;
+  maxWithdrawalRatioPct: number;
+  updatedAt: number;
+  updatedBy: string;
+}
+
+export interface DirectoryPlayer {
+  id: string;
+  email: string;
+  displayName: string;
+  role: 'OWNER' | 'PLAYER' | 'DEMO';
+  isActive: boolean;
+  coinsBalance: number;
+  lastLoginAt: number;
+}
+
+export interface CoinTransferRecord {
+  id: string;
+  senderEmail: string;
+  senderName: string;
+  recipientEmail: string;
+  recipientName: string;
+  grossCoins: number;
+  feeCoins: number;
+  netCoins: number;
+  feePct: number;
+  usdEquivalent: number;
+  note: string;
+  txHash: string;
+  createdAt: number;
 }
 
 export interface ServerResourceMetrics {
@@ -131,7 +339,7 @@ export interface PaymentMethodOption {
 export interface TransactionRecord {
   id: string;
   timestamp: number;
-  type: 'RECHARGE' | 'SKILL_UPGRADE' | 'CASINO_WIN' | 'CASINO_BET' | 'ARENA_REWARD' | 'REDEMPTION_REQUEST' | 'LEVEL_UNLOCK';
+  type: 'RECHARGE' | 'SKILL_UPGRADE' | 'CASINO_WIN' | 'CASINO_BET' | 'ARENA_REWARD' | 'REDEMPTION_REQUEST' | 'LEVEL_UNLOCK' | 'COIN_TRANSFER';
   title: string;
   description: string;
   amountCoins: number;
@@ -288,4 +496,42 @@ export interface PaymentResolutionLookup {
   creditedCoins?: number;
 }
 
+export type AuditTrailCategory = 'FINANCIAL' | 'API_CONFIG' | 'AUTHORIZATION' | 'SECURITY';
+
+export interface AuditTrailEntry {
+  seq: number;
+  id: string;
+  timestamp: number;
+  actor_email: string;
+  ip_address: string;
+  action: string;
+  category: AuditTrailCategory;
+  severity: 'INFO' | 'WARN' | 'CRITICAL';
+  details: string;
+  prev_hash: string;
+  row_hash: string;
+  firestoreSynced?: boolean;
+}
+
+export interface AuditTrailPageResponse {
+  items: AuditTrailEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  categoryCounts: {
+    ALL: number;
+    FINANCIAL: number;
+    API_CONFIG: number;
+    AUTHORIZATION: number;
+    SECURITY: number;
+  };
+  integrity: {
+    sqliteOk: boolean;
+    chainValid: boolean;
+    checkedRows: number;
+    lockedAccountsCount: number;
+    dbSizeKB: number;
+  };
+}
 

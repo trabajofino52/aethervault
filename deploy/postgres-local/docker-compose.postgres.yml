@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: aethervault_pg_local
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aethervault_local
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Tripitaka@8069@9982@Profesor
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - aethervault_pg_data:/var/lib/postgresql/data
+      - ./01_schema_complete.sql:/docker-entrypoint-initdb.d/01_schema_complete.sql:ro
+      - ./02_seed_local_tests.sql:/docker-entrypoint-initdb.d/02_seed_local_tests.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d aethervault_local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  aethervault_pg_data:

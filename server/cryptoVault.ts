@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+export const UNIFIED_VM_SECURITY_KEY = 'Tripitaka@8069@9982@Profesor';
+
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const MASTER_KEY_FILE = path.join(DATA_DIR, '.master.key');
 const SESSION_KEY_FILE = path.join(DATA_DIR, '.session.key');
@@ -17,10 +19,19 @@ function ensureDataDir(): void {
   }
 }
 
+function deriveSha256Key(secret: string): Buffer {
+  return crypto.createHash('sha256').update(secret.trim(), 'utf8').digest();
+}
+
 function loadOrCreateHexSecret(envVarName: string, keyFilePath: string): Buffer {
   const envValue = process.env[envVarName];
-  if (envValue && envValue.trim().length >= 32) {
-    return crypto.createHash('sha256').update(envValue.trim(), 'utf8').digest();
+  if (envValue && envValue.trim().length >= 16) {
+    return deriveSha256Key(envValue);
+  }
+
+  // Unified VM / Local testing key (user-requested until rotated on VPS production)
+  if (process.env.NODE_ENV !== 'production' || process.env.VM_TEST_MODE === 'true') {
+    return deriveSha256Key(UNIFIED_VM_SECURITY_KEY);
   }
 
   ensureDataDir();
@@ -105,6 +116,16 @@ export function encryptField(plaintext: string): string {
   return `gcm$${iv.toString('base64url')}$${authTag.toString('base64url')}$${encrypted.toString('base64url')}`;
 }
 
+function decryptWithKey(parts: string[], key: Buffer): string {
+  const iv = Buffer.from(parts[1], 'base64url');
+  const authTag = Buffer.from(parts[2], 'base64url');
+  const ciphertext = Buffer.from(parts[3], 'base64url');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(authTag);
+  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  return decrypted.toString('utf8');
+}
+
 export function decryptField(payload: string): string {
   if (!payload) return '';
   if (!payload.startsWith('gcm$')) {
@@ -113,15 +134,19 @@ export function decryptField(payload: string): string {
   const parts = payload.split('$');
   if (parts.length !== 4) return '';
   try {
-    const iv = Buffer.from(parts[1], 'base64url');
-    const authTag = Buffer.from(parts[2], 'base64url');
-    const ciphertext = Buffer.from(parts[3], 'base64url');
-    const key = getEncryptionKey();
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-    decipher.setAuthTag(authTag);
-    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-    return decrypted.toString('utf8');
+    return decryptWithKey(parts, getEncryptionKey());
   } catch {
+    // Fallback for legacy .master.key file if rotated from random local key to unified key
+    try {
+      if (fs.existsSync(MASTER_KEY_FILE)) {
+        const raw = fs.readFileSync(MASTER_KEY_FILE, 'utf8').trim();
+        if (/^[0-9a-f]{64}$/i.test(raw)) {
+          return decryptWithKey(parts, Buffer.from(raw, 'hex'));
+        }
+      }
+    } catch {
+      // ignore fallback error
+    }
     return '[DECRYPTION_ERROR]';
   }
 }

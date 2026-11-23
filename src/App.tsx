@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { GameProvider, useGame } from './context/GameContext';
+import { logVmExperience } from './utils/telemetry';
 import { Header } from './components/Header';
 import { PushNotificationToast } from './components/PushNotificationToast';
 import { StoreModal } from './components/StoreModal';
@@ -29,6 +30,7 @@ import { PaymentPlatformsGuide } from './components/PaymentPlatformsGuide';
 import { Top50CasinoHub } from './components/Top50CasinoHub';
 import { FloatingShortcutsDock } from './components/FloatingShortcutsDock';
 import { UserSupportPanel } from './components/UserSupportPanel';
+import { PlayerTransferExchangeModal } from './components/PlayerTransferExchangeModal';
 import { COIN_TIERS } from './data/coinTiers';
 import {
   Coins,
@@ -685,6 +687,7 @@ const GlobalModalsContainer: React.FC = () => {
       <ReferralModal />
       <MultiplayerChatWidget />
       <UserSupportPanel />
+      <PlayerTransferExchangeModal />
     </>
   );
 };
@@ -725,60 +728,115 @@ const DemoAccountTopBanner: React.FC = () => {
   );
 };
 
+class TelemetryErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; message: string }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: '' };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, message: error?.message || 'Error inesperado de interfaz' };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    logVmExperience({
+      category: 'UI_ERROR',
+      gameName: 'REACT_BOUNDARY',
+      severity: 'ERROR',
+      summary: error?.message || 'Fallo de renderizado React',
+      details: {
+        stack: error?.stack ? String(error.stack).slice(0, 800) : '',
+        componentStack: info?.componentStack ? String(info.componentStack).slice(0, 600) : ''
+      }
+    });
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+          <div className="max-w-md w-full bg-slate-900 border border-rose-500/40 rounded-2xl p-6 space-y-4 text-center">
+            <h2 className="text-lg font-bold text-rose-300">Se capturó un error en la prueba</h2>
+            <p className="text-xs text-slate-300 font-mono bg-slate-950 p-3 rounded-xl border border-slate-800">
+              {this.state.message}
+            </p>
+            <p className="text-xs text-slate-400">
+              El incidente quedó guardado automáticamente en la bitácora QA del Administrador.
+            </p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs"
+            >
+              Recargar Plataforma
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
-    <GameProvider>
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-slate-950">
-        
-        {/* Floating Real-Time Push Notification Toast */}
-        <PushNotificationToast />
+    <TelemetryErrorBoundary>
+      <GameProvider>
+        <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-slate-950">
+          
+          {/* Floating Real-Time Push Notification Toast */}
+          <PushNotificationToast />
 
-        {/* 3-Zone Top Bar */}
-        <Header />
+          {/* 3-Zone Top Bar */}
+          <Header />
 
-        {/* Real-Time Live Winning Marquee Ticker */}
-        <LiveWinningTicker />
+          {/* Real-Time Live Winning Marquee Ticker */}
+          <LiveWinningTicker />
 
-        {/* Demo Account Indicator Banner */}
-        <DemoAccountTopBanner />
+          {/* Demo Account Indicator Banner */}
+          <DemoAccountTopBanner />
 
-        {/* Main View Area */}
-        <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6">
-          <MainContent />
-        </main>
+          {/* Main View Area */}
+          <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6">
+            <MainContent />
+          </main>
 
-        {/* Global Modals */}
-        <GlobalModalsContainer />
+          {/* Global Modals */}
+          <GlobalModalsContainer />
 
-        {/* Floating Quick Action Dock */}
-        <FloatingShortcutsDock />
+          {/* Floating Quick Action Dock */}
+          <FloatingShortcutsDock />
 
-        {/* Clean Editorial Footer (§1.B) */}
-        <footer className="border-t border-slate-800/80 py-8 bg-slate-950/90 text-xs text-slate-500">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-slate-300 font-display">AETHERVAULT</span>
-              <span>·</span>
-              <span>Gestión de Monedas & Casino Provably-Fair</span>
-              <span>·</span>
-              <span>Cifrado E2EE 256-Bit</span>
+          {/* Clean Editorial Footer (§1.B) */}
+          <footer className="border-t border-slate-800/80 py-8 bg-slate-950/90 text-xs text-slate-500">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-slate-300 font-display">AETHERVAULT</span>
+                <span>·</span>
+                <span>Gestión de Monedas & Casino Provably-Fair</span>
+                <span>·</span>
+                <span>Cifrado E2EE 256-Bit</span>
+              </div>
+
+              <div className="flex items-center gap-4 text-slate-400">
+                <span className="flex items-center gap-1">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  Semillas SHA-256 Verificadas
+                </span>
+                <span>·</span>
+                <span className="flex items-center gap-1">
+                  <Fingerprint className="w-3.5 h-3.5 text-cyan-400" />
+                  WebAuthn Passkey
+                </span>
+              </div>
             </div>
+          </footer>
 
-            <div className="flex items-center gap-4 text-slate-400">
-              <span className="flex items-center gap-1">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                Semillas SHA-256 Verificadas
-              </span>
-              <span>·</span>
-              <span className="flex items-center gap-1">
-                <Fingerprint className="w-3.5 h-3.5 text-cyan-400" />
-                WebAuthn Passkey
-              </span>
-            </div>
-          </div>
-        </footer>
-
-      </div>
-    </GameProvider>
+        </div>
+      </GameProvider>
+    </TelemetryErrorBoundary>
   );
 }

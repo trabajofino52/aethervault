@@ -1,0 +1,429 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Cross-device user profile, level, XP, and synced coin balance.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "role": {
+          "type": "string",
+          "enum": ["OWNER", "PLAYER"]
+        },
+        "coinsBalance": {
+          "type": "number"
+        },
+        "level": {
+          "type": "number"
+        },
+        "xp": {
+          "type": "number"
+        },
+        "devicePlatform": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "displayName", "role", "coinsBalance", "level", "xp", "createdAt", "updatedAt"]
+    },
+    "UserBalanceLedger": {
+      "title": "UserBalanceLedger",
+      "description": "Authoritative cross-device coin balance ledger updated by BTCPay Server blockchain settlement webhooks.",
+      "type": "object",
+      "properties": {
+        "balanceId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160
+        },
+        "coinsBalance": {
+          "type": "number"
+        },
+        "totalDepositedUSD": {
+          "type": "number"
+        },
+        "lastInvoiceId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "lastTxConfirmation": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["balanceId", "email", "coinsBalance", "totalDepositedUSD", "lastInvoiceId", "createdAt", "updatedAt"]
+    },
+    "BtcpayWebhookEvent": {
+      "title": "BtcpayWebhookEvent",
+      "description": "Idempotent record of blockchain-confirmed BTCPay Server payment webhooks processed via VaultConfigPanel.",
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "deliveryId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "invoiceId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "eventType": {
+          "type": "string",
+          "enum": ["InvoiceSettled", "InvoicePaymentSettled", "InvoiceProcessing", "InvoiceExpired", "InvoiceInvalid", "ManualTest"]
+        },
+        "userEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160
+        },
+        "coinsCredited": {
+          "type": "number"
+        },
+        "amountUSD": {
+          "type": "number"
+        },
+        "blockchainConfirmed": {
+          "type": "boolean"
+        },
+        "signatureVerified": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["CREDITED", "IGNORED_EVENT", "FAILED"]
+        },
+        "processedByEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["eventId", "deliveryId", "invoiceId", "eventType", "userEmail", "coinsCredited", "amountUSD", "blockchainConfirmed", "signatureVerified", "status", "processedByEmail", "createdAt"]
+    },
+    "VaultConfigRecord": {
+      "title": "VaultConfigRecord",
+      "description": "Owner-exclusive VaultConfigPanel synchronization metadata across devices (secrets stay encrypted on server).",
+      "type": "object",
+      "properties": {
+        "configId": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160
+        },
+        "btcpayEnabled": {
+          "type": "boolean"
+        },
+        "btcpayServerUrl": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "btcpayStoreId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "nowpaymentsEnabled": {
+          "type": "boolean"
+        },
+        "coingateEnabled": {
+          "type": "boolean"
+        },
+        "activeOnRamp": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "preferredVirtualCard": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "maxClientWithdrawalPct": {
+          "type": "number"
+        },
+        "requiresOwnerAuth": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["configId", "ownerUid", "ownerEmail", "btcpayEnabled", "maxClientWithdrawalPct", "requiresOwnerAuth", "createdAt", "updatedAt"]
+    },
+    "AdminRegistry": {
+      "title": "AdminRegistry",
+      "description": "Verified platform owner record for Firestore RBAC.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "createdAt"]
+    },
+    "RedemptionRequest": {
+      "title": "RedemptionRequest",
+      "description": "User withdrawal request capped automatically at 30% of total balance with awaitingAuthorization flag requiring manual owner action.",
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "playerEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160
+        },
+        "playerName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "balanceBeforeCoins": {
+          "type": "number"
+        },
+        "maxAllowed30PctCoins": {
+          "type": "number"
+        },
+        "requestedOriginalCoins": {
+          "type": "number"
+        },
+        "cappedAutomatically": {
+          "type": "boolean"
+        },
+        "amountCoins": {
+          "type": "number"
+        },
+        "grossUSD": {
+          "type": "number"
+        },
+        "feeUSD": {
+          "type": "number"
+        },
+        "netUSD": {
+          "type": "number"
+        },
+        "destinationType": {
+          "type": "string",
+          "enum": ["crypto_usdt", "crypto_monero", "crypto_btc", "paypal", "bank_wire"]
+        },
+        "destinationAddress": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "status": {
+          "type": "string",
+          "enum": ["PENDING_APPROVAL", "APPROVED", "REJECTED"]
+        },
+        "awaitingAuthorization": {
+          "type": "boolean"
+        },
+        "authorizedByEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160
+        },
+        "rejectionReason": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "txHash": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reviewedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "requestId",
+        "playerEmail",
+        "playerName",
+        "balanceBeforeCoins",
+        "maxAllowed30PctCoins",
+        "amountCoins",
+        "grossUSD",
+        "feeUSD",
+        "netUSD",
+        "destinationType",
+        "destinationAddress",
+        "status",
+        "awaitingAuthorization",
+        "txHash",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AuditTrailEntry": {
+      "title": "AuditTrailEntry",
+      "description": "Immutable owner-only audit trail entry recording financial transactions, API config changes, and authorization events.",
+      "type": "object",
+      "properties": {
+        "entryId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "seq": {
+          "type": "number"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["FINANCIAL", "API_CONFIG", "AUTHORIZATION", "SECURITY"]
+        },
+        "action": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["INFO", "WARN", "CRITICAL"]
+        },
+        "actorEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160
+        },
+        "ipAddress": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "details": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "rowHash": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "syncedByEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "entryId",
+        "seq",
+        "category",
+        "action",
+        "severity",
+        "actorEmail",
+        "ipAddress",
+        "details",
+        "rowHash",
+        "syncedByEmail",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Cross-device user profile and synced coin balance."
+    },
+    "/user_balances/{balanceId}": {
+      "schema": { "$ref": "#/entities/UserBalanceLedger" },
+      "description": "Authoritative blockchain-settled coin balances indexed by email slug."
+    },
+    "/btcpay_webhooks/{eventId}": {
+      "schema": { "$ref": "#/entities/BtcpayWebhookEvent" },
+      "description": "Idempotent audit trail of BTCPay Server webhook settlements."
+    },
+    "/vault_configs/{configId}": {
+      "schema": { "$ref": "#/entities/VaultConfigRecord" },
+      "description": "Owner-only VaultConfigPanel cross-device settings."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminRegistry" },
+      "description": "Owner admin lookup documents."
+    },
+    "/redemption_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/RedemptionRequest" },
+      "description": "30%-capped withdrawal requests with awaitingAuthorization flag requiring manual owner approval."
+    },
+    "/audit_trail/{entryId}": {
+      "schema": { "$ref": "#/entities/AuditTrailEntry" },
+      "description": "Immutable owner-only audit trail mirroring SHA-256 hash-chained financial, API, and authorization events."
+    }
+  }
+}

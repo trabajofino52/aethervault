@@ -8,7 +8,8 @@ import {
   MessageSquare,
   Sparkles,
   Play,
-  LifeBuoy
+  LifeBuoy,
+  ArrowLeftRight
 } from 'lucide-react';
 import { soundFx } from '../utils/audio';
 
@@ -21,7 +22,8 @@ export const FloatingShortcutsDock: React.FC = () => {
     isChatWidgetOpen,
     setActiveTab,
     isHappyHourActiveForGame,
-    setIsSupportPanelOpen
+    setIsSupportPanelOpen,
+    setIsTransferModalOpen
   } = useGame();
 
   const hh = isHappyHourActiveForGame('Roulette');
@@ -97,7 +99,20 @@ export const FloatingShortcutsDock: React.FC = () => {
         <span className="hidden sm:inline">Chat</span>
       </button>
 
-      {/* 6. Soporte & Tickets */}
+      {/* 6. Transferir P2P & Cambio PayPal/USDT */}
+      <button
+        onClick={() => {
+          setIsTransferModalOpen(true);
+          soundFx.playClick();
+        }}
+        title="Transferencias P2P, Conversor USD/USDT y Retiros PayPal/USDT"
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-300 hover:text-emerald-200 border border-slate-800 hover:border-emerald-500/40 text-xs font-semibold whitespace-nowrap transition-transform active:scale-95"
+      >
+        <ArrowLeftRight className="w-3.5 h-3.5 text-emerald-400" />
+        <span className="hidden sm:inline">Transferir / Cambio</span>
+      </button>
+
+      {/* 7. Soporte & Tickets */}
       <button
         onClick={() => {
           setIsSupportPanelOpen(true);

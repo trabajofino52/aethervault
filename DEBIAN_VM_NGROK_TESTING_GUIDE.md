@@ -88,16 +88,25 @@ ngrok config add-authtoken TU_AUTHTOKEN_AQUI
 
 ---
 
-### Paso 5: Ejecutar la Aplicación y Abrir el Túnel Ngrok
+### Paso 5: Configurar Variables de Entorno (.env) y Ejecutar el Servidor Full-Stack + Ngrok
 
-Puedes probarlo inmediatamente en dos terminales o con `screen`/`tmux`:
+> ⚠️ **Importante**: Esta aplicación incluye backend Express (`/api/*`), base de datos SQLite y webhooks de BTCPay Server dentro de `server.ts`. No uses `vite preview` porque no levanta la API del backend; ejecuta siempre el servidor unificado en el puerto `3000`.
 
-#### Terminal 1: Iniciar el Servidor de la Aplicación
+Crea el archivo `.env` en la raíz del proyecto (puedes partir de `.env.example`):
+
+```bash
+cp .env.example .env
+# Edita .env si deseas definir tus llaves o usa tu clave de pruebas local
+```
+
+Puedes iniciar el servidor completo y Ngrok en dos terminales:
+
+#### Terminal 1: Iniciar el Servidor Full-Stack (Frontend + Backend API `/api/*` en puerto 3000)
 ```bash
 cd /var/www/aethervault
-npm run preview -- --host 0.0.0.0 --port 3000
-# O si estás en modo desarrollo:
-# npm run dev -- --host 0.0.0.0 --port 3000
+# Opción A (Producción recomendada tras npm run build en Node 20/22+):
+npx tsx server.ts
+# (O en desarrollo directo: npm run dev)
 ```
 
 #### Terminal 2: Iniciar el Túnel Ngrok
@@ -110,7 +119,9 @@ Ngrok te mostrará en pantalla una URL pública segura como:
 Forwarding   https://a1b2-c3d4.ngrok-free.app -> http://localhost:3000
 ```
 
-¡Listo! Ya puedes abrir esa URL `https://....ngrok-free.app` desde tu teléfono, laptop u otra PC en cualquier red para probar el juego completo.
+¡Listo! Ya puedes abrir esa URL `https://....ngrok-free.app` desde tu teléfono, laptop u otra PC en cualquier red para probar el juego completo, el panel `VaultConfigPanel`, los webhooks BTCPay (`https://....ngrok-free.app/api/webhooks/btcpay`) y el `AuditTrail`.
+
+> 🔐 **Si usas Google Sign-In / Firestore desde la URL de Ngrok**: agrega el host `xxxx.ngrok-free.app` en Firebase Console → *Authentication → Settings → Authorized domains*.
 
 ---
 
@@ -123,10 +134,10 @@ Si quieres que el juego y Ngrok sigan corriendo aunque cierres la terminal de la
 sudo npm install -g pm2
 ```
 
-### 2. Iniciar el juego con PM2
+### 2. Iniciar el servidor unificado con PM2
 ```bash
 cd /var/www/aethervault
-pm2 start npm --name "aethervault-game" -- run preview -- --host 0.0.0.0 --port 3000
+pm2 start "npx tsx server.ts" --name "aethervault-server"
 ```
 
 ### 3. Iniciar Ngrok con PM2 o en segundo plano
@@ -143,11 +154,53 @@ curl -s http://127.0.0.1:4040/api/tunnels | grep -o 'https://[^"]*ngrok-free.app
 
 ---
 
+## 💳 Paso 6: Conectar PayPal REST API Oficial y Webhooks con Ngrok
+
+1. Ingresa al **PayPal Developer Dashboard** (`developer.paypal.com`), abre **Apps & Credentials** y selecciona **Sandbox** (para pruebas sin dinero real) o **Live** (producción).
+2. Crea o abre tu aplicación PayPal Business y copia tu **Client ID** y **Secret**.
+3. Inicia sesión en AetherVault como propietario (`trabajofino52@gmail.com` / clave `Tripitaka@8069@9982@Profesor`) y abre:
+   **Bóveda Dueño → VaultConfigPanel: APIs & Retiros → Tarjeta PayPal REST API Oficial**.
+   - Elige entorno `sandbox` o `live`, pega el `Client ID`, `Client Secret` y tu correo comerciante PayPal, y haz clic en **Guardar Bóveda Cifrada**.
+   - Pulsa **Probar OAuth PayPal** para verificar en vivo el token OAuth2 oficial contra PayPal.
+4. Para recibir confirmaciones automáticas de pago por túnel Ngrok:
+   - En **PayPal Developer → Webhooks → Add Webhook**, registra tu URL pública:
+     ```text
+     https://TU-SUBDOMINIO.ngrok-free.app/api/webhooks/paypal
+     ```
+   - Suscríbete a los eventos: `PAYMENT.CAPTURE.COMPLETED` y `CHECKOUT.ORDER.APPROVED`.
+   - Copia el **Webhook ID** generado por PayPal, pégalo en el campo `Webhook ID` dentro de `VaultConfigPanel` y guarda nuevamente (las credenciales se guardan cifradas con AES-256-GCM en SQLite).
+
+---
+
+## 🎮 Paso 7: Prueba Multijugador Completa (Juegos, Transferencias P2P y Retiros PayPal / USDT)
+
+1. **Abre la URL pública de Ngrok** (`https://TU-SUBDOMINIO.ngrok-free.app`) en distintos navegadores o dispositivos (PC, teléfono, ventana incógnito).
+2. **Inicia sesión con distintos jugadores VM**:
+   - Dispositivo A: `tester01@vm.aethervault.local` (clave `vmtest2026`).
+   - Dispositivo B: `tester02@vm.aethervault.local` (clave `vmtest2026`).
+   - *(Disponibles de `tester01` hasta `tester10` con saldo real en SQLite sincronizado entre dispositivos)*.
+3. **Prueba cada juego con múltiples jugadores**:
+   - Juega **Ruleta Europea**, **Blackjack 21**, **Póker Video**, **Arena** y los juegos del **Top 50 Casino**.
+   - La plataforma aplica la retención de la casa (`70%` bóveda / `30%` premios por defecto, configurable en **Economía 70% Bóveda / 30% Premios**) y sincroniza cada apuesta/premio en la base de datos.
+4. **Transferencia entre jugadores y Conversión de Monedas**:
+   - Pulsa **Transferir / Cambio** en la barra superior o en el dock inferior.
+   - Envía monedas desde `tester01` hacia `tester02`: el servidor deduce automáticamente la **Comisión P2P del casino (5%)** a favor de la bóveda y acredita el neto al destinatario de forma atómica.
+   - Usa la pestaña **Cambio & Retiro PayPal/USDT** para convertir entre Monedas Aether, USD y USDT (`1,000 mo = $800 USD`) y verificar tu tope máximo retirable del **30%**.
+5. **Retiro a PayPal o USDT con Autorización del Dueño**:
+   - Desde **Transferir / Cambio → Solicitar Retiro a PayPal o USDT**, ingresa un monto (limitado al 30% del saldo), elige `PayPal Business` o `USDT (TRC-20)` y escribe el correo PayPal o billetera TRC-20.
+   - Entra como propietario (`trabajofino52@gmail.com`) a **Bóveda Dueño → Autorización de Canjes**, verifica la solicitud en **Espera de Autorización** (con la comisión del 20% deducida para el casino) y pulsa **Autorizar**:
+     - Si el método es **PayPal** y configuraste tus llaves REST API, el servidor enviará automáticamente la orden a **PayPal Payouts v1** (`/v1/payments/payouts`) registrando el `Batch ID` y `payoutStatus`.
+     - Todo movimiento queda registrado en tiempo real en la pestaña **AuditTrail (Auditoría Integral)**.
+
+---
+
 ## 🛡️ Credenciales y Datos Clave para las Pruebas
 
 - **Usuario Administrador / Dueño**: `trabajofino52@gmail.com`
-- **Clave Maestra de Acceso E2EE (256-bit)**: `GokuCheckersMasterKey2024Secure`
+- **Clave Maestra de Acceso E2EE (256-bit)**: `Tripitaka@8069@9982@Profesor`
 - **Tasa Oficial de Cambio**: 1,000 monedas = $800.00 USD ($0.80 USD / moneda)
+- **Reglas de Negocio Activas en Servidor**: `70%` Retención Casa · `20%` Comisión Retiro · `5%` Comisión P2P · Tope `30%` Retiro Máximo · `Espera de Autorización` manual obligatoria.
 - **Módulos Exclusivos del Dueño**:
-  - 👑 **Bóveda Dueño**: Regalos masivos por grupos/sección de juego, configuración de Hora Loca con multiplicadores en vivo, telemetría de jugadores online/offline.
-  - 🏛️ **Neobanco & Pasarelas**: Las 10 plataformas recomendadas (Stripe, Adyen, BVNK, CoinPayments, etc.) y la arquitectura del banco digital.
+  - 👑 **Bóveda Dueño**: Configuración de APIs cifradas (`VaultConfigPanel`), autorización de canjes, márgenes dinámicos, airdrops, telemetría y `AuditTrail`.
+  - 🏛️ **Neobanco & Pasarelas**: Las 10 plataformas recomendadas y arquitectura del banco digital.
+

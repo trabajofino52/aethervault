@@ -25,8 +25,24 @@ import {
   TicketMessage,
   TicketCategory,
   TicketPriority,
-  TicketStatus
+  TicketStatus,
+  UsdtNetwork,
+  GatewayPublicAvailability,
+  CoinPurchaseOrder,
+  CoinTransferRecord,
+  DirectoryPlayer,
+  EconomyConfig
 } from '../types';
+import { onAuthStateChanged, type User } from 'firebase/auth';
+import { auth } from '../lib/firebase';
+import {
+  syncUserProfileToFirestore,
+  subscribeToUserFirestoreBalance,
+  upsertRedemptionRequestToFirestore,
+  reviewRedemptionRequestInFirestore,
+  subscribeToFirestoreRedemptionRequests
+} from '../services/firestoreVaultService';
+import { logVmExperience, installGlobalErrorTelemetry } from '../utils/telemetry';
 import { COIN_TIERS } from '../data/coinTiers';
 import { soundFx } from '../utils/audio';
 import { generateTxHash, sha256, generateRandomHex } from '../utils/crypto';
@@ -67,12 +83,15 @@ interface GameContextType {
   // User, Owner & Demo Session
   userEmail: string;
   authToken: string | null;
+  firebaseUser: User | null;
+  firestoreSyncedBalance: number | null;
   isOwner: boolean;
   isDemoAccount: boolean;
   isRealAccountActive: boolean;
   loginUser: (email: string) => void;
   loginOwnerWithKey: (password: string) => Promise<boolean>;
   loginDemoUser: (password: string) => Promise<boolean>;
+  loginVmTester: (testerId: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   resetDemoFunds: () => void;
   activateRealAccountWithDeposit: () => void;
   logoutUser: () => void;
@@ -94,6 +113,8 @@ interface GameContextType {
   setIsChatWidgetOpen: (open: boolean) => void;
   isSupportPanelOpen: boolean;
   setIsSupportPanelOpen: (open: boolean) => void;
+  isTransferModalOpen: boolean;
+  setIsTransferModalOpen: (open: boolean) => void;
 
   // Support Tickets, User Security & Payment Issue Resolution
   supportTickets: SupportTicket[];
@@ -118,6 +139,8 @@ interface GameContextType {
 
   // Admin & Financial Management
   payoutConfig: PayoutDestinationConfig;
+  gatewayAvailability: GatewayPublicAvailability;
+  refreshPayoutConfigFromServer: () => Promise<void>;
   updatePayoutConfig: (config: Partial<PayoutDestinationConfig>) => void;
   adminWithdrawals: AdminWithdrawalRecord[];
   executeAdminWithdrawal: (amountUSD: number, destinationType: 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'bank_wire' | 'paypal', destinationAddress: string) => Promise<boolean>;
@@ -128,15 +151,48 @@ interface GameContextType {
   isAdminUnlocked: boolean;
   setIsAdminUnlocked: (unlocked: boolean) => void;
 
-  // Dynamic Vault Margins & Economics (70% House / 30% Player Reserve / 20% Withdrawal Fee)
+  // Dynamic Vault Margins & Economics (70% House / 30% Player Reserve / 20% Withdrawal Fee / 5% Transfer Fee)
   vaultRetentionRate: number;
   playerPrizeRate: number;
   redemptionFeeRate: number;
-  updateVaultMargins: (retentionRate: number, feeRate: number) => void;
+  transferFeeRate: number;
+  updateVaultMargins: (retentionRate: number, feeRate: number, transferFeeRate?: number) => void;
   vaultEconomics: VaultSplitEconomics;
+
+  // Multi-Player P2P Transfers, Directory & Currency Exchange
+  directoryPlayers: DirectoryPlayer[];
+  transfersHistory: CoinTransferRecord[];
+  refreshTransfersAndDirectory: () => Promise<void>;
+  transferCoinsToPlayer: (params: {
+    recipientEmail: string;
+    amountCoins: number;
+    note?: string;
+  }) => Promise<{ ok: boolean; message: string; transfer?: CoinTransferRecord }>;
+  capturePayPalOrder: (
+    paypalOrderId: string,
+    localOrderId?: string
+  ) => Promise<{ ok: boolean; message: string; updatedCoinsBalance?: number }>;
   
-  // Coin Redemptions (Cashouts requiring Owner Authorization)
+  // Coin Redemptions (Auto-capped 30% balance limit + explicit Espera de Autorización)
   redemptionRequests: PlayerRedemptionRequest[];
+  redeemableUsers: Array<{
+    id: string;
+    email: string;
+    displayName: string;
+    role: string;
+    isActive: boolean;
+    coinsBalance: number;
+    maxAllowed30PctCoins: number;
+  }>;
+  refreshRedemptionsFromServer: () => Promise<void>;
+  validateAndCreateAdminRedemption: (params: {
+    playerEmail: string;
+    playerName?: string;
+    requestedCoins: number;
+    destinationType: 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire';
+    destinationAddress: string;
+  }) => Promise<{ ok: boolean; message: string; request?: PlayerRedemptionRequest }>;
+  syncRedemptionToFirestore: (req: PlayerRedemptionRequest) => Promise<boolean>;
   requestPlayerRedemption: (coins: number, destType: 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire', destAddress: string) => Promise<boolean>;
   approveRedemptionRequest: (requestId: string) => Promise<boolean>;
   rejectRedemptionRequest: (requestId: string, reason?: string) => Promise<boolean>;
@@ -188,6 +244,21 @@ interface GameContextType {
   // Actions
   unlockNextHeroLevel: (costCoins: number, costUSD: number) => Promise<boolean>;
   rechargeCoins: (tier: CoinPackageTier, paymentMethod: PaymentMethodType, biometricVerified: boolean) => Promise<TransactionRecord>;
+  createLiveGatewayInvoice: (params: {
+    tier: CoinPackageTier;
+    paymentMethod: PaymentMethodType;
+    usdtNetwork: UsdtNetwork;
+    gatewayProvider: string;
+  }) => Promise<{ ok: boolean; order?: CoinPurchaseOrder; checkoutUrl?: string | null; isLiveApi?: boolean; gatewayNotice?: string; error?: string }>;
+  settleCoinPurchaseWithUsdt: (params: {
+    tier: CoinPackageTier;
+    paymentMethod: PaymentMethodType;
+    usdtNetwork: UsdtNetwork;
+    txHash: string;
+    biometricVerified: boolean;
+    existingOrderId?: string;
+    gatewayProvider?: string;
+  }) => Promise<{ ok: boolean; error?: string; record?: TransactionRecord; destinationWallet?: string }>;
   upgradeSkill: (skill: keyof CharacterSkills) => boolean;
   getSkillUpgradeCost: (skill: keyof CharacterSkills) => number;
   executeBet: (game: 'Roulette' | 'Blackjack' | 'Poker' | 'Arena' | 'Top50Casino', betAmount: number, winAmount: number, details: string) => Promise<{ won: boolean; net: number; round: ProvablyFairRound }>;
@@ -207,25 +278,33 @@ const STORAGE_KEY_ADMIN_WITHDRAWALS = 'aethervault_admin_withdrawals_v1';
 const STORAGE_KEY_USER_EMAIL = 'aethervault_user_email_v1';
 
 export const OWNER_EMAIL = 'trabajofino52@gmail.com';
-// Clave 256-bit cifrada para trabajofino52@gmail.com (GokuCheckersMasterKey2024Secure)
-export const OWNER_KEY_HASH_256 = '4fa9b3722fd5ff79ffea5511c819e9cafc4592b026864d82b25857e885c91cdf';
 
 // Cuenta Demo Aislada para Pruebas Completas sin Afectar Cuentas Reales
 export const DEMO_USERNAME = 'gokudemo';
 export const DEMO_PASSWORD = 'goku30309982';
+export const VM_TESTER_DEFAULT_PASS = 'vmtest2026';
 // Tasa oficial: 1,000 monedas = $800.00 USD -> $5,000.00 USD = 6,250 monedas
 export const DEMO_INITIAL_COINS = 6250;
 export const DEMO_INITIAL_USD = 5000;
 
 const INITIAL_PAYOUT_CONFIG: PayoutDestinationConfig = {
-  merchantName: 'AetherVault Gaming Ltd. (Bóveda Principal)',
+  merchantName: 'AetherVault Gaming Ltd. (Bóveda Principal USDT / BTC)',
   usdtTrc20Address: 'TRX7xQ8z99E10vP44aZ88yQw3901bLkVaether',
   usdtErc20Address: '0x742d35Cc6634C0532925a3b844Bc454e4438f44e',
+  usdtBep20Address: '0x742d35Cc6634C0532925a3b844Bc454e4438f44e',
+  btcAddress: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
+  binancePayId: '',
   paypalEmail: 'cobros@aethervault.io',
+  paypalMode: 'BUSINESS',
+  cardGatewayProvider: 'NOWPAYMENTS_CARD_TO_CRYPTO',
+  primarySettlementRail: 'USDT',
   bankIbanSwift: 'ES76 2100 0418 4502 0005 1332 (SWIFT: CAIXESBBXXX)',
   bankAccountHolder: 'AetherVault Operaciones Internacionales',
   stripeAccountId: 'acct_1NvAether89234',
-  autoForwardToWallet: true
+  autoForwardToWallet: true,
+  autoConvertToUsdt: true,
+  vmTestModeEnabled: true,
+  maxVmTesters: 10
 };
 
 const INITIAL_SKILLS: CharacterSkills = {
@@ -425,6 +504,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const loginOwnerWithKey = async (password: string): Promise<boolean> => {
     const cleanPass = password.trim();
+    if (!cleanPass) return false;
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -446,50 +526,48 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // ignore
         }
         soundFx.playBiometricSuccess();
+        logVmExperience({
+          userEmail: OWNER_EMAIL,
+          category: 'AUTH_EVENT',
+          gameName: 'ADMIN_VAULT',
+          severity: 'INFO',
+          summary: 'Administrador autenticado correctamente mediante verificación scrypt SQL.'
+        });
         addNotification(
-          'Sesión de Propietario Cifrada 256-bit Verificada',
-          `Bienvenido de vuelta ${OWNER_EMAIL}. Bóveda del Dueño y Auditoría de Servidor desbloqueadas con token HMAC-SHA256.`,
+          'Sesión de Propietario Cifrada Verificada',
+          `Bienvenido ${OWNER_EMAIL}. Bóveda del Dueño y Auditoría de Servidor desbloqueadas con token HMAC-SHA256.`,
           'security'
         );
         return true;
       }
 
-      if (res.status === 401 || res.status === 429) {
-        const errData = (await res.json().catch(() => ({}))) as { error?: string };
-        soundFx.playClick();
-        addNotification(
-          res.status === 429 ? 'Bloqueo de Seguridad Activo' : 'Clave Maestra Inválida',
-          errData.error || 'La clave ingresada no coincide con los registros cifrados del servidor.',
-          'security'
-        );
-        return false;
-      }
-    } catch {
-      // Fallback to local SHA-256 verification if backend unreachable
-    }
-
-    const hash = await sha256(cleanPass);
-    if (hash === OWNER_KEY_HASH_256) {
-      setUserEmail(OWNER_EMAIL);
-      setIsOwnerAuthenticated(true);
-      try {
-        localStorage.setItem(STORAGE_KEY_USER_EMAIL, OWNER_EMAIL);
-        localStorage.setItem('aethervault_owner_auth_v1', 'true');
-      } catch {
-        // ignore
-      }
-      soundFx.playBiometricSuccess();
+      const errData = (await res.json().catch(() => ({}))) as { error?: string };
+      soundFx.playClick();
+      logVmExperience({
+        userEmail: OWNER_EMAIL,
+        category: 'AUTH_EVENT',
+        gameName: 'ADMIN_VAULT',
+        severity: 'WARN',
+        summary: `Fallo de autenticación de propietario (HTTP ${res.status}).`
+      });
       addNotification(
-        'Sesión de Propietario Cifrada 256-bit Verificada',
-        `Bienvenido de vuelta ${OWNER_EMAIL}. Bóveda del Dueño y Hub de Neobanco desbloqueados con éxito.`,
+        res.status === 429 ? 'Bloqueo de Seguridad Activo' : 'Clave Maestra Inválida',
+        errData.error || 'La clave ingresada no coincide con los registros cifrados en SQL.',
         'security'
       );
-      return true;
-    } else {
+      return false;
+    } catch {
       soundFx.playClick();
+      logVmExperience({
+        userEmail: OWNER_EMAIL,
+        category: 'API_ERROR',
+        gameName: 'ADMIN_VAULT',
+        severity: 'ERROR',
+        summary: 'No se pudo contactar /api/auth/login para validar credenciales del propietario.'
+      });
       addNotification(
-        'Clave Maestra Inválida',
-        'La clave ingresada no coincide con el hash SHA-256 de 256-bit del propietario.',
+        'Servidor de Autenticación No Disponible',
+        'Asegúrate de que el servidor backend esté activo para validar la clave en la base de datos SQL.',
         'security'
       );
       return false;
@@ -576,6 +654,67 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const loginVmTester = async (
+    testerId: string,
+    password: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const cleanId = testerId.trim().toLowerCase();
+    const cleanPass = password.trim();
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanId, password: cleanPass })
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        token?: string;
+        error?: string;
+        user?: { email: string; displayName: string; isActive?: boolean; isDemoIsolated: boolean; coinsBalance?: number };
+      };
+      if (!res.ok) {
+        return { ok: false, error: data.error || 'Credenciales inválidas para tester VM.' };
+      }
+      const resolvedEmail = data.user?.email || cleanId;
+      const syncedCoins = typeof data.user?.coinsBalance === 'number' ? data.user.coinsBalance : DEMO_INITIAL_COINS;
+      if (data.token) {
+        persistAuthToken(data.token);
+      }
+      setUserEmail(resolvedEmail);
+      setIsOwnerAuthenticated(false);
+      setCoins(syncedCoins);
+      if (data.user?.isActive && !data.user?.isDemoIsolated) {
+        setHasConfirmedRealDeposit(true);
+      }
+      try {
+        localStorage.setItem(STORAGE_KEY_USER_EMAIL, resolvedEmail);
+        localStorage.setItem('aethervault_owner_auth_v1', 'false');
+        localStorage.setItem(STORAGE_KEY_COINS, syncedCoins.toString());
+        if (data.user?.isActive && !data.user?.isDemoIsolated) {
+          localStorage.setItem('aethervault_real_deposit_v1', 'true');
+        }
+      } catch {
+        // ignore
+      }
+      soundFx.playCoinChime();
+      logVmExperience({
+        userEmail: resolvedEmail,
+        category: 'AUTH_EVENT',
+        gameName: 'VM_QA_SANDBOX',
+        severity: 'INFO',
+        summary: `Tester VM conectado (${resolvedEmail}) con ${syncedCoins.toLocaleString()} mo.`
+      });
+      addNotification(
+        'Tester VM Conectado (Máx. 10)',
+        `Sesión de prueba activa para ${resolvedEmail} (${syncedCoins.toLocaleString()} monedas). Listo para jugar, transferir y probar PayPal/USDT.`,
+        'info'
+      );
+      setActiveTab('top_50_casino');
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Error conectando con el servidor de pruebas VM.' };
+    }
+  };
+
   const resetDemoFunds = () => {
     setCoins(DEMO_INITIAL_COINS);
     try {
@@ -618,8 +757,27 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     })
       .then(async res => {
         if (res.ok) {
-          const data = (await res.json()) as { token?: string };
+          const data = (await res.json()) as {
+            token?: string;
+            user?: { coinsBalance?: number; isActive?: boolean; isDemoIsolated?: boolean };
+          };
           if (data.token) persistAuthToken(data.token);
+          if (typeof data.user?.coinsBalance === 'number') {
+            setCoins(data.user.coinsBalance);
+            try {
+              localStorage.setItem(STORAGE_KEY_COINS, String(data.user.coinsBalance));
+            } catch {
+              // ignore
+            }
+          }
+          if (data.user?.isActive && !data.user?.isDemoIsolated) {
+            setHasConfirmedRealDeposit(true);
+            try {
+              localStorage.setItem('aethervault_real_deposit_v1', 'true');
+            } catch {
+              // ignore
+            }
+          }
         }
       })
       .catch(() => {
@@ -654,16 +812,122 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setActiveTab('store');
   };
 
-  // Admin Payout Config
+  // Admin Payout Config (Authoritative sync with server DB)
   const [payoutConfig, setPayoutConfig] = useState<PayoutDestinationConfig>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_PAYOUT_CONFIG);
-      if (saved) return JSON.parse(saved);
+      if (saved) return { ...INITIAL_PAYOUT_CONFIG, ...JSON.parse(saved) };
     } catch {
       // fallback
     }
     return INITIAL_PAYOUT_CONFIG;
   });
+
+  const [gatewayAvailability, setGatewayAvailability] = useState<GatewayPublicAvailability>({
+    btcpayConfigured: false,
+    btcpayServerUrl: '',
+    nowpaymentsConfigured: false,
+    coingateConfigured: false,
+    paypalConfigured: false,
+    paypalEnvironment: 'sandbox',
+    activeOnRamp: 'NOWPAYMENTS_FIAT',
+    onRampConfigured: false,
+    preferredVirtualCard: 'REDOTPAY'
+  });
+
+  const refreshPayoutConfigFromServer = useCallback(async () => {
+    try {
+      const res = await fetch('/api/payments/usdt-config');
+      if (res.ok) {
+        const serverCfg = (await res.json()) as Partial<PayoutDestinationConfig> & {
+          gatewayAvailability?: GatewayPublicAvailability;
+          economyConfig?: EconomyConfig;
+        };
+        const { gatewayAvailability: gwAvail, economyConfig: econCfg, ...rest } = serverCfg;
+        setPayoutConfig(prev => ({ ...prev, ...rest }));
+        if (gwAvail) {
+          setGatewayAvailability(gwAvail);
+        }
+        if (econCfg) {
+          setVaultRetentionRate(econCfg.vaultRetentionPct);
+          setRedemptionFeeRate(econCfg.redemptionFeePct);
+          setTransferFeeRate(econCfg.transferFeePct);
+          try {
+            localStorage.setItem('aethervault_retention_rate_v1', String(econCfg.vaultRetentionPct));
+            localStorage.setItem('aethervault_fee_rate_v1', String(econCfg.redemptionFeePct));
+            localStorage.setItem('aethervault_transfer_fee_rate_v1', String(econCfg.transferFeePct));
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch {
+      // ignore offline fallback
+    }
+  }, []);
+
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [firestoreSyncedBalance, setFirestoreSyncedBalance] = useState<number | null>(null);
+  const lastSeenFirestoreInvoiceRef = React.useRef<string>('');
+
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, user => {
+      setFirebaseUser(user);
+      if (!user) {
+        setFirestoreSyncedBalance(null);
+      }
+    });
+    return () => unsubAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!firebaseUser || !firebaseUser.email || !firebaseUser.emailVerified) return;
+
+    void syncUserProfileToFirestore({
+      user: firebaseUser,
+      displayName: character.name,
+      level: character.level,
+      xp: character.experience
+    }).catch(() => {
+      // Structured diagnostics already logged via handleFirestoreError
+    });
+  }, [firebaseUser, character.name, character.level, character.experience]);
+
+  useEffect(() => {
+    if (!firebaseUser || !firebaseUser.email || !firebaseUser.emailVerified) return;
+    const subscribedEmail = firebaseUser.email.toLowerCase();
+
+    const unsubBal = subscribeToUserFirestoreBalance(subscribedEmail, data => {
+      if (!data) {
+        setFirestoreSyncedBalance(null);
+        return;
+      }
+      setFirestoreSyncedBalance(data.coinsBalance);
+
+      if (
+        data.lastInvoiceId &&
+        data.lastInvoiceId !== lastSeenFirestoreInvoiceRef.current &&
+        userEmail.trim().toLowerCase() === subscribedEmail &&
+        !isDemoAccount
+      ) {
+        lastSeenFirestoreInvoiceRef.current = data.lastInvoiceId;
+        if (data.coinsBalance > coins) {
+          setCoins(data.coinsBalance);
+          setHasConfirmedRealDeposit(true);
+        }
+      }
+    });
+
+    return () => unsubBal();
+  }, [firebaseUser, userEmail, isDemoAccount, coins]);
+
+  useEffect(() => {
+    installGlobalErrorTelemetry(() => userEmail);
+  }, [userEmail]);
+
+  useEffect(() => {
+    refreshPayoutConfigFromServer();
+  }, [refreshPayoutConfigFromServer]);
 
   // Admin Withdrawals
   const [adminWithdrawals, setAdminWithdrawals] = useState<AdminWithdrawalRecord[]>(() => {
@@ -704,6 +968,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isReferralModalOpen, setIsReferralModalOpen] = useState(false);
   const [isChatWidgetOpen, setIsChatWidgetOpen] = useState(false);
   const [isSupportPanelOpen, setIsSupportPanelOpen] = useState(false);
+  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
 
   // Support Tickets State
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>(() => {
@@ -831,25 +1096,164 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   });
 
+  const [transferFeeRate, setTransferFeeRate] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('aethervault_transfer_fee_rate_v1');
+      return saved ? Number(saved) : 5;
+    } catch {
+      return 5;
+    }
+  });
+
   const playerPrizeRate = Math.max(0, 100 - vaultRetentionRate);
 
-  const updateVaultMargins = (newRetention: number, newFee: number) => {
+  const updateVaultMargins = (newRetention: number, newFee: number, newTransferFee?: number) => {
     const clampedRetention = Math.min(95, Math.max(50, newRetention));
     const clampedFee = Math.min(50, Math.max(5, newFee));
+    const clampedTransferFee = Math.min(
+      25,
+      Math.max(0, newTransferFee !== undefined ? newTransferFee : transferFeeRate)
+    );
     setVaultRetentionRate(clampedRetention);
     setRedemptionFeeRate(clampedFee);
+    setTransferFeeRate(clampedTransferFee);
     try {
       localStorage.setItem('aethervault_retention_rate_v1', String(clampedRetention));
       localStorage.setItem('aethervault_fee_rate_v1', String(clampedFee));
+      localStorage.setItem('aethervault_transfer_fee_rate_v1', String(clampedTransferFee));
     } catch {
       // ignore
     }
     soundFx.playCoinChime();
     addNotification(
       'Parámetros Económicos Actualizados',
-      `Margen de Bóveda: ${clampedRetention}%, Reserva de Premios: ${100 - clampedRetention}%, Comisión de Retiro: ${clampedFee}%.`,
+      `Casa: ${clampedRetention}%, Premios: ${100 - clampedRetention}%, Comisión Retiro: ${clampedFee}%, Transfer P2P: ${clampedTransferFee}%.`,
       'security'
     );
+    if (isOwner && authToken) {
+      void fetch('/api/admin/economy-config', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          vaultRetentionPct: clampedRetention,
+          redemptionFeePct: clampedFee,
+          transferFeePct: clampedTransferFee
+        })
+      }).catch(() => {});
+    }
+  };
+
+  // Multi-Player P2P Transfers & Directory State
+  const [directoryPlayers, setDirectoryPlayers] = useState<DirectoryPlayer[]>([]);
+  const [transfersHistory, setTransfersHistory] = useState<CoinTransferRecord[]>([]);
+
+  const refreshTransfersAndDirectory = useCallback(async () => {
+    if (!authToken) return;
+    try {
+      const [dirRes, trfRes] = await Promise.all([
+        fetch('/api/players/directory', { headers: { Authorization: `Bearer ${authToken}` } }),
+        fetch('/api/transfers', { headers: { Authorization: `Bearer ${authToken}` } })
+      ]);
+      if (dirRes.ok) {
+        const dirData = (await dirRes.json()) as {
+          players?: DirectoryPlayer[];
+          economyConfig?: EconomyConfig;
+        };
+        if (Array.isArray(dirData.players)) setDirectoryPlayers(dirData.players);
+        if (dirData.economyConfig) {
+          setVaultRetentionRate(dirData.economyConfig.vaultRetentionPct);
+          setRedemptionFeeRate(dirData.economyConfig.redemptionFeePct);
+          setTransferFeeRate(dirData.economyConfig.transferFeePct);
+        }
+      }
+      if (trfRes.ok) {
+        const trfData = (await trfRes.json()) as { transfers?: CoinTransferRecord[] };
+        if (Array.isArray(trfData.transfers)) setTransfersHistory(trfData.transfers);
+      }
+    } catch {
+      // ignore offline
+    }
+  }, [authToken]);
+
+  useEffect(() => {
+    if (authToken) {
+      void refreshTransfersAndDirectory();
+    }
+  }, [authToken, refreshTransfersAndDirectory]);
+
+  const transferCoinsToPlayer = async (params: {
+    recipientEmail: string;
+    amountCoins: number;
+    note?: string;
+  }): Promise<{ ok: boolean; message: string; transfer?: CoinTransferRecord }> => {
+    if (isDemoAccount) {
+      const msg = 'La cuenta demo gokudemo está aislada y no puede enviar ni recibir transferencias reales.';
+      addNotification('Demo Aislada', msg, 'security');
+      return { ok: false, message: msg };
+    }
+    if (!authToken) {
+      const msg = 'Conecta una cuenta autenticada (ej. tester01 o tu cuenta real) para transferir monedas.';
+      addNotification('Sesión Requerida', msg, 'security');
+      return { ok: false, message: msg };
+    }
+    try {
+      const res = await fetch('/api/transfers/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          recipientEmail: params.recipientEmail.trim().toLowerCase(),
+          amountCoins: Math.floor(params.amountCoins),
+          note: params.note?.trim()
+        })
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        message?: string;
+        error?: string;
+        transfer?: CoinTransferRecord;
+        senderBalanceCoins?: number;
+      };
+      if (!res.ok || !data.ok || !data.transfer) {
+        const errMsg = data.error || 'No se pudo completar la transferencia.';
+        addNotification('Transferencia Rechazada', errMsg, 'security');
+        return { ok: false, message: errMsg };
+      }
+
+      if (typeof data.senderBalanceCoins === 'number') {
+        setCoins(data.senderBalanceCoins);
+        try {
+          localStorage.setItem(STORAGE_KEY_COINS, String(data.senderBalanceCoins));
+        } catch {
+          // ignore
+        }
+      }
+
+      const txRec: TransactionRecord = {
+        id: 'tx_' + data.transfer.id,
+        timestamp: data.transfer.createdAt,
+        type: 'COIN_TRANSFER',
+        title: `Transferencia P2P -> ${data.transfer.recipientName}`,
+        description: `Enviaste ${data.transfer.grossCoins.toLocaleString()} mo (Comisión Casino ${data.transfer.feePct}%: ${data.transfer.feeCoins} mo | Neto: ${data.transfer.netCoins.toLocaleString()} mo).`,
+        amountCoins: -data.transfer.grossCoins,
+        amountUSD: -data.transfer.usdEquivalent,
+        status: 'COMPLETED',
+        txHash: data.transfer.txHash,
+        biometricVerified: false
+      };
+      setTransactions(prev => [txRec, ...prev]);
+      soundFx.playCoinChime();
+      addNotification('Transferencia Enviada', data.message || 'Transferencia procesada.', 'success');
+      void refreshTransfersAndDirectory();
+      return { ok: true, message: data.message || 'Transferencia exitosa.', transfer: data.transfer };
+    } catch {
+      return { ok: false, message: 'Error de red enviando transferencia.' };
+    }
   };
 
   // Daily Quests State
@@ -1130,45 +1534,110 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => clearInterval(interval);
   }, [gameMode]);
 
-  // Redemptions (Cashouts with 20% commission to Owner's Vault)
+  // Redemptions (Cashouts with strict 30% balance limit, 20% commission to Owner's Vault, and mandatory Espera de Autorización)
   const [redemptionRequests, setRedemptionRequests] = useState<PlayerRedemptionRequest[]>(() => {
     try {
       const saved = localStorage.getItem('aethervault_redemptions_v1');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved) as Array<Partial<PlayerRedemptionRequest>>;
+        return parsed.map(r => ({
+          ...(r as PlayerRedemptionRequest),
+          awaitingAuthorization: r.awaitingAuthorization ?? r.status === 'PENDING_APPROVAL'
+        }));
+      }
     } catch {
       // fallback
     }
-    return [
-      {
-        id: 'red_101',
-        playerEmail: 'carlos_trader@crypto.io',
-        playerName: 'Carlos VIP',
-        amountCoins: 300,
-        grossUSD: 240,
-        feeUSD: 48, // 20% auto-deducted
-        netUSD: 192, // 80% to player
-        destinationType: 'crypto_usdt',
-        destinationAddress: 'TRX88xP99qLaEther99120',
-        status: 'PENDING_APPROVAL',
-        timestamp: Date.now() - 7200000,
-        txHash: '0x49f91a0c8973b1847192a9cf1832049182371928371928371928371928371928'
-      },
-      {
-        id: 'red_102',
-        playerEmail: 'elena_gamer@vip.io',
-        playerName: 'Elena Pro',
-        amountCoins: 100,
-        grossUSD: 80,
-        feeUSD: 16, // 20%
-        netUSD: 64, // 80%
-        destinationType: 'paypal',
-        destinationAddress: 'elena_pro@vip.io',
-        status: 'PENDING_APPROVAL',
-        timestamp: Date.now() - 3600000,
-        txHash: '0x718293a817293819283019283019283019283019283019283019283019283019'
-      }
-    ];
+    return [];
   });
+
+  const [redeemableUsers, setRedeemableUsers] = useState<Array<{
+    id: string;
+    email: string;
+    displayName: string;
+    role: string;
+    isActive: boolean;
+    coinsBalance: number;
+    maxAllowed30PctCoins: number;
+  }>>([]);
+
+  const refreshRedemptionsFromServer = useCallback(async () => {
+    if (!authToken) return;
+    try {
+      const res = await fetch('/api/redemptions', {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        requests?: PlayerRedemptionRequest[];
+        users?: Array<{
+          id: string;
+          email: string;
+          displayName: string;
+          role: string;
+          isActive: boolean;
+          coinsBalance: number;
+          maxAllowed30PctCoins: number;
+        }>;
+      };
+      if (data?.requests) {
+        setRedemptionRequests(prev => {
+          const syncedMap = new Map(prev.map(p => [p.id, Boolean(p.firestoreSynced)]));
+          const merged = data.requests!.map(r => ({
+            ...r,
+            awaitingAuthorization: r.awaitingAuthorization ?? r.status === 'PENDING_APPROVAL',
+            firestoreSynced: syncedMap.get(r.id) ?? r.firestoreSynced ?? false
+          }));
+          return merged;
+        });
+      }
+      if (Array.isArray(data?.users)) {
+        setRedeemableUsers(data.users);
+      }
+    } catch {
+      // Keep local fallback
+    }
+  }, [authToken]);
+
+  useEffect(() => {
+    void refreshRedemptionsFromServer();
+  }, [refreshRedemptionsFromServer]);
+
+  useEffect(() => {
+    if (!firebaseUser || !firebaseUser.email || !firebaseUser.emailVerified) return;
+    let unsub: (() => void) | undefined;
+    try {
+      unsub = subscribeToFirestoreRedemptionRequests(fsRequests => {
+        setRedemptionRequests(prev => {
+          const byId = new Map<string, PlayerRedemptionRequest>();
+          for (const item of prev) {
+            byId.set(item.id, item);
+          }
+          for (const fsItem of fsRequests) {
+            const existing = byId.get(fsItem.id);
+            if (!existing) {
+              byId.set(fsItem.id, { ...fsItem, firestoreSynced: true });
+            } else {
+              // Merge Firestore authoritative flags without dropping SQLite metadata
+              const fsResolved = fsItem.status !== 'PENDING_APPROVAL' && !fsItem.awaitingAuthorization;
+              const existingResolved = existing.status !== 'PENDING_APPROVAL' && !existing.awaitingAuthorization;
+              byId.set(fsItem.id, {
+                ...existing,
+                ...(fsResolved && !existingResolved ? fsItem : {}),
+                firestoreSynced: true
+              });
+            }
+          }
+          return Array.from(byId.values()).sort((a, b) => b.timestamp - a.timestamp);
+        });
+      });
+    } catch {
+      // ignore subscription initialization error
+    }
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [firebaseUser]);
 
   useEffect(() => {
     try {
@@ -1270,6 +1739,18 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Admin Configuration and Withdrawal Handlers
   const updatePayoutConfig = (newConfig: Partial<PayoutDestinationConfig>) => {
     setPayoutConfig(prev => ({ ...prev, ...newConfig }));
+    if (authToken && isOwner) {
+      fetch('/api/admin/payout-config', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify(newConfig)
+      }).catch(() => {
+        // local state retained
+      });
+    }
   };
 
   const executeAdminWithdrawal = async (
@@ -1292,6 +1773,20 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem(STORAGE_KEY_ADMIN_WITHDRAWALS, JSON.stringify([newWd, ...adminWithdrawals]));
     } catch {
       // ignore
+    }
+    if (authToken) {
+      void fetch('/api/admin/audit-trail/record', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          action: 'ADMIN_WITHDRAWAL_EXECUTED',
+          severity: 'CRITICAL',
+          details: `Retiro dueño $${amountUSD.toFixed(2)} USD vía ${destinationType} hacia ${destinationAddress.slice(0, 64)} (TX ${newWd.txHash.slice(0, 14)}...)`
+        })
+      }).catch(() => {});
     }
     return true;
   };
@@ -1440,6 +1935,21 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     soundFx.playWinFanfare();
     confetti({ particleCount: 110, spread: 80 });
 
+    if (isOwner && authToken) {
+      void fetch('/api/admin/audit-trail/record', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          action: 'ADMIN_COINS_AIRDROP',
+          severity: 'WARN',
+          details: `Airdrop +${amountCoins} monedas/usuario a ${targetLabel} (${count} usuarios, total ${totalDistributed}). Motivo: ${reason}`
+        })
+      }).catch(() => {});
+    }
+
     return {
       success: true,
       recipientsCount: count,
@@ -1467,6 +1977,20 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } else {
       soundFx.playClick();
       addNotification('Deducción de Monedas', `Se han deducido ${Math.abs(amountDelta)} monedas (${reason}).`, 'info');
+    }
+    if (isOwner && authToken) {
+      void fetch('/api/admin/audit-trail/record', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          action: 'ADMIN_COINS_ADJUSTED',
+          severity: 'WARN',
+          details: `Ajuste manual ${amountDelta >= 0 ? '+' : ''}${amountDelta} monedas (${reason})`
+        })
+      }).catch(() => {});
     }
   };
 
@@ -1634,6 +2158,121 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // Actions for redemptions
+  const syncRedemptionToFirestore = async (req: PlayerRedemptionRequest): Promise<boolean> => {
+    if (!firebaseUser || !firebaseUser.email || !firebaseUser.emailVerified) {
+      addNotification(
+        'Sesión Google Requerida',
+        `Conecta tu cuenta Google (${OWNER_EMAIL}) en la Bóveda para sincronizar en Firestore.`,
+        'security'
+      );
+      return false;
+    }
+    try {
+      const synced = await upsertRedemptionRequestToFirestore({ req, actorUser: firebaseUser });
+      if (synced) {
+        setRedemptionRequests(prev =>
+          prev.map(item => (item.id === req.id ? { ...item, firestoreSynced: true } : item))
+        );
+        addNotification(
+          'Sincronizado en Firestore',
+          `La solicitud #${req.id.slice(-8)} quedó registrada en Firestore con awaitingAuthorization=${req.awaitingAuthorization}.`,
+          'success'
+        );
+      }
+      return synced;
+    } catch (err) {
+      addNotification(
+        'Error al Sincronizar Firestore',
+        err instanceof Error ? err.message : 'No se pudo guardar la solicitud en Firestore.',
+        'security'
+      );
+      return false;
+    }
+  };
+
+  const validateAndCreateAdminRedemption = async (params: {
+    playerEmail: string;
+    playerName?: string;
+    requestedCoins: number;
+    destinationType: 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire';
+    destinationAddress: string;
+  }): Promise<{ ok: boolean; message: string; request?: PlayerRedemptionRequest }> => {
+    if (!isOwner || userEmail.toLowerCase() !== OWNER_EMAIL.toLowerCase() || !authToken) {
+      const msg = `Solo ${OWNER_EMAIL} autenticado con token HMAC puede ejecutar el validador de retiros.`;
+      addNotification('Acceso Restringido', msg, 'security');
+      return { ok: false, message: msg };
+    }
+
+    try {
+      const res = await fetch('/api/admin/redemptions/validate-and-create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          playerEmail: params.playerEmail.trim().toLowerCase(),
+          playerName: params.playerName?.trim(),
+          requestedCoins: Math.floor(params.requestedCoins),
+          destinationType: params.destinationType,
+          destinationAddress: params.destinationAddress.trim(),
+          feeRatePct: redemptionFeeRate
+        })
+      });
+
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        message?: string;
+        error?: string;
+        request?: PlayerRedemptionRequest;
+      };
+
+      if (!res.ok || !data.ok || !data.request) {
+        const msg = data.error || 'No se pudo validar y registrar la solicitud de retiro.';
+        addNotification('Validación Rechazada', msg, 'security');
+        return { ok: false, message: msg };
+      }
+
+      let finalReq: PlayerRedemptionRequest = {
+        ...data.request,
+        awaitingAuthorization: true,
+        firestoreSynced: false
+      };
+
+      if (firebaseUser && firebaseUser.email && firebaseUser.emailVerified) {
+        try {
+          const synced = await upsertRedemptionRequestToFirestore({
+            req: finalReq,
+            actorUser: firebaseUser
+          });
+          if (synced) {
+            finalReq = { ...finalReq, firestoreSynced: true };
+          }
+        } catch {
+          // SQLite record persists authoritatively; Firestore can be synced manually if offline
+        }
+      }
+
+      setRedemptionRequests(prev => [finalReq, ...prev.filter(r => r.id !== finalReq.id)]);
+      await refreshRedemptionsFromServer();
+      soundFx.playCoinChime();
+
+      addNotification(
+        finalReq.cappedAutomatically
+          ? 'Solicitud Limitada Automáticamente al 30%'
+          : 'Solicitud Validada en Espera de Autorización',
+        data.message || `Solicitud creada con Espera de Autorización activa para ${OWNER_EMAIL}.`,
+        finalReq.cappedAutomatically ? 'info' : 'success'
+      );
+
+      return { ok: true, message: data.message || 'Solicitud creada.', request: finalReq };
+    } catch {
+      const msg = 'Error de conexión con /api/admin/redemptions/validate-and-create.';
+      addNotification('Error de Red', msg, 'security');
+      return { ok: false, message: msg };
+    }
+  };
+
   const requestPlayerRedemption = async (
     coinsToRedeem: number,
     destType: 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire',
@@ -1659,6 +2298,90 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (coinsToRedeem <= 0 || coinsToRedeem > coins) return false;
 
+    const maxAllowed30Pct = Math.floor(coins * 0.30);
+    if (coinsToRedeem > maxAllowed30Pct) {
+      addNotification(
+        'Límite Máximo de Retiro: 30%',
+        `Por política de liquidez, solo puedes retirar hasta el 30% de tu saldo (${maxAllowed30Pct.toLocaleString()} monedas) y requiere autorización de ${OWNER_EMAIL}.`,
+        'security'
+      );
+      return false;
+    }
+
+    if (authToken) {
+      try {
+        const res = await fetch('/api/redemptions/request', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`
+          },
+          body: JSON.stringify({
+            amountCoins: coinsToRedeem,
+            playerName: character.name,
+            destinationType: destType,
+            destinationAddress: destAddress,
+            feeRatePct: redemptionFeeRate
+          })
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          request?: PlayerRedemptionRequest;
+          updatedCoinsBalance?: number;
+          error?: string;
+        };
+        if (!res.ok || !data.ok || !data.request) {
+          addNotification('Retiro No Permitido', data.error || 'No se pudo procesar la solicitud de retiro.', 'security');
+          return false;
+        }
+        if (typeof data.updatedCoinsBalance === 'number') {
+          setCoins(data.updatedCoinsBalance);
+        } else {
+          setCoins(prev => prev - coinsToRedeem);
+        }
+
+        let createdReq: PlayerRedemptionRequest = {
+          ...data.request,
+          awaitingAuthorization: data.request.awaitingAuthorization ?? true
+        };
+
+        if (firebaseUser && firebaseUser.email && firebaseUser.emailVerified) {
+          try {
+            const synced = await upsertRedemptionRequestToFirestore({
+              req: createdReq,
+              actorUser: firebaseUser
+            });
+            if (synced) createdReq = { ...createdReq, firestoreSynced: true };
+          } catch {
+            // Keep SQLite record
+          }
+        }
+
+        setRedemptionRequests(prev => [createdReq, ...prev.filter(r => r.id !== createdReq.id)]);
+        const tx: TransactionRecord = {
+          id: 'tx_red_' + Date.now(),
+          timestamp: Date.now(),
+          type: 'REDEMPTION_REQUEST',
+          title: `Solicitud de Canje (Máx 30%): ${coinsToRedeem} Monedas ($${createdReq.netUSD.toFixed(2)} USD Netos)`,
+          description: `Retiro verificado en BD dentro del límite 30% con ${redemptionFeeRate}% de comisión ($${createdReq.feeUSD.toFixed(2)} USD). En Espera de Autorización de ${OWNER_EMAIL}.`,
+          amountCoins: -coinsToRedeem,
+          amountUSD: createdReq.netUSD,
+          status: 'PENDING',
+          txHash: createdReq.txHash,
+          biometricVerified: true
+        };
+        setTransactions(prev => [tx, ...prev]);
+        addNotification(
+          'Solicitud de Retiro Enviada (Tope 30%)',
+          `Se reservaron ${coinsToRedeem} monedas ($${createdReq.netUSD.toFixed(2)} USD netos). En Espera de Autorización manual de ${OWNER_EMAIL}.`,
+          'info'
+        );
+        return true;
+      } catch {
+        // Fallback if local API unreachable
+      }
+    }
+
     const grossUSD = coinsToRedeem * 0.8;
     const feeRateFraction = redemptionFeeRate / 100;
     const feeUSD = Math.round(grossUSD * feeRateFraction * 100) / 100; // Dynamic commission to Owner's Vault
@@ -1674,10 +2397,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       timestamp: Date.now()
     });
 
-    const newReq: PlayerRedemptionRequest = {
+    let newReq: PlayerRedemptionRequest = {
       id: 'red_' + Date.now(),
       playerEmail: userEmail,
       playerName: character.name,
+      balanceBeforeCoins: coins,
+      maxAllowed30PctCoins: maxAllowed30Pct,
+      requestedOriginalCoins: coinsToRedeem,
+      cappedAutomatically: false,
       amountCoins: coinsToRedeem,
       grossUSD,
       feeUSD,
@@ -1685,9 +2412,20 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       destinationType: destType,
       destinationAddress: destAddress,
       status: 'PENDING_APPROVAL',
+      awaitingAuthorization: true,
       timestamp: Date.now(),
-      txHash
+      txHash,
+      firestoreSynced: false
     };
+
+    if (firebaseUser && firebaseUser.email && firebaseUser.emailVerified) {
+      try {
+        const synced = await upsertRedemptionRequestToFirestore({ req: newReq, actorUser: firebaseUser });
+        if (synced) newReq = { ...newReq, firestoreSynced: true };
+      } catch {
+        // keep local state
+      }
+    }
 
     setCoins(prev => prev - coinsToRedeem);
     setRedemptionRequests(prev => [newReq, ...prev]);
@@ -1696,8 +2434,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       id: 'tx_red_' + Date.now(),
       timestamp: Date.now(),
       type: 'REDEMPTION_REQUEST',
-      title: `Solicitud de Canje: ${coinsToRedeem} Monedas ($${netUSD.toFixed(2)} USD Netos)`,
-      description: `Retiro con 20% de comisión ($${feeUSD.toFixed(2)} USD) retenida para la Bóveda. Pendiente de autorización por ${OWNER_EMAIL}`,
+      title: `Solicitud de Canje (Máx 30%): ${coinsToRedeem} Monedas ($${netUSD.toFixed(2)} USD Netos)`,
+      description: `Retiro con ${redemptionFeeRate}% de comisión ($${feeUSD.toFixed(2)} USD) retenida para la Bóveda. En Espera de Autorización de ${OWNER_EMAIL}`,
       amountCoins: -coinsToRedeem,
       amountUSD: netUSD,
       status: 'PENDING',
@@ -1708,44 +2446,128 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     addNotification(
       'Solicitud de Canje Enviada',
-      `Se descontaron ${coinsToRedeem} monedas. En cola para autorización por ${OWNER_EMAIL}. Monto neto: $${netUSD.toFixed(2)} USD (20% comisión Bóveda).`,
+      `Se descontaron ${coinsToRedeem} monedas. En Espera de Autorización manual por ${OWNER_EMAIL}. Monto neto: $${netUSD.toFixed(2)} USD.`,
       'info'
     );
     return true;
   };
 
   const approveRedemptionRequest = async (requestId: string): Promise<boolean> => {
-    if (!isOwner) {
+    if (!isOwner || userEmail.toLowerCase() !== OWNER_EMAIL.toLowerCase()) {
       addNotification('Acceso Restringido', `Solo el Administrador (${OWNER_EMAIL}) puede autorizar canjes.`, 'security');
       return false;
     }
 
     const targetReq = redemptionRequests.find(r => r.id === requestId);
-    if (!targetReq || targetReq.status !== 'PENDING_APPROVAL') return false;
+    if (!targetReq || targetReq.status !== 'PENDING_APPROVAL' || !targetReq.awaitingAuthorization) return false;
+
+    if (typeof targetReq.balanceBeforeCoins === 'number' && targetReq.balanceBeforeCoins > 0) {
+      const cap30 = Math.floor(targetReq.balanceBeforeCoins * 0.30);
+      if (targetReq.amountCoins > cap30) {
+        addNotification(
+          'Bloqueo de Validación 30%',
+          `La solicitud #${requestId.slice(-8)} (${targetReq.amountCoins} mo) excede el 30% (${cap30} mo). Recházala para reembolsar.`,
+          'security'
+        );
+        return false;
+      }
+    }
+
+    if (authToken) {
+      try {
+        const res = await fetch(`/api/redemptions/${encodeURIComponent(requestId)}/review`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`
+          },
+          body: JSON.stringify({ decision: 'APPROVED' })
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          addNotification('Error de Autorización', err.error || 'No se pudo autorizar el retiro en el servidor.', 'security');
+          return false;
+        }
+      } catch {
+        // fallback local update
+      }
+    }
+
+    if (firebaseUser && firebaseUser.emailVerified && firebaseUser.email?.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
+      try {
+        await reviewRedemptionRequestInFirestore({
+          requestId,
+          decision: 'APPROVED',
+          ownerUser: firebaseUser
+        });
+      } catch {
+        // Keep SQLite authoritative even if doc wasn't synced yet
+      }
+    }
 
     setRedemptionRequests(prev =>
       prev.map(r =>
         r.id === requestId
-          ? { ...r, status: 'APPROVED', reviewedAt: Date.now() }
+          ? {
+              ...r,
+              status: 'APPROVED',
+              awaitingAuthorization: false,
+              authorizedByEmail: OWNER_EMAIL,
+              reviewedAt: Date.now()
+            }
           : r
       )
     );
 
+    await refreshRedemptionsFromServer();
     soundFx.playCoinChime();
     confetti({ particleCount: 75, spread: 60 });
 
     addNotification(
-      'Canje Autorizado con Éxito',
-      `Se autorizó el retiro de $${targetReq.netUSD.toFixed(2)} USD para ${targetReq.playerName}. La comisión del 20% ($${targetReq.feeUSD.toFixed(2)} USD) ingresó a tu Bóveda.`,
+      'Canje Autorizado Manualmente',
+      `Se resolvió Espera de Autorización y se liberó $${targetReq.netUSD.toFixed(2)} USD para ${targetReq.playerName}. La comisión del 20% ($${targetReq.feeUSD.toFixed(2)} USD) ingresó a tu Bóveda.`,
       'success'
     );
     return true;
   };
 
   const rejectRedemptionRequest = async (requestId: string, reason?: string): Promise<boolean> => {
-    if (!isOwner) return false;
+    if (!isOwner || userEmail.toLowerCase() !== OWNER_EMAIL.toLowerCase()) return false;
     const targetReq = redemptionRequests.find(r => r.id === requestId);
-    if (!targetReq || targetReq.status !== 'PENDING_APPROVAL') return false;
+    if (!targetReq || targetReq.status !== 'PENDING_APPROVAL' || !targetReq.awaitingAuthorization) return false;
+
+    if (authToken) {
+      try {
+        const res = await fetch(`/api/redemptions/${encodeURIComponent(requestId)}/review`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`
+          },
+          body: JSON.stringify({ decision: 'REJECTED', rejectionReason: reason })
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          addNotification('Error al Rechazar Retiro', err.error || 'No se pudo rechazar el retiro.', 'security');
+          return false;
+        }
+      } catch {
+        // fallback local update
+      }
+    }
+
+    if (firebaseUser && firebaseUser.emailVerified && firebaseUser.email?.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
+      try {
+        await reviewRedemptionRequestInFirestore({
+          requestId,
+          decision: 'REJECTED',
+          ownerUser: firebaseUser,
+          rejectionReason: reason
+        });
+      } catch {
+        // Keep SQLite authoritative
+      }
+    }
 
     // Refund coins to user if current
     if (targetReq.playerEmail === userEmail) {
@@ -1758,6 +2580,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           ? {
               ...r,
               status: 'REJECTED',
+              awaitingAuthorization: false,
+              authorizedByEmail: OWNER_EMAIL,
               reviewedAt: Date.now(),
               rejectionReason: reason || 'Rechazado por verificación de seguridad'
             }
@@ -1765,8 +2589,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       )
     );
 
+    await refreshRedemptionsFromServer();
     soundFx.playClick();
-    addNotification('Solicitud de Canje Rechazada', `La solicitud de ${targetReq.playerName} fue rechazada y las monedas reembolsadas.`, 'info');
+    addNotification('Solicitud de Canje Rechazada', `La solicitud de ${targetReq.playerName} salió de Espera de Autorización y las monedas fueron reembolsadas.`, 'info');
     return true;
   };
 
@@ -2078,17 +2903,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     if (isOwner) {
-      const currentHash = await sha256(currentPassword.trim());
-      if (currentHash !== OWNER_KEY_HASH_256 && currentPassword.trim() !== 'GokuCheckersMasterKey2024Secure') {
-        return { success: false, message: 'La clave actual de Propietario de 256 bits no coincide.' };
-      }
-      soundFx.playBiometricSuccess();
-      addNotification(
-        'Contraseña de Propietario Actualizada',
-        'Tu clave maestra ha sido validada y actualizada con cifrado SHA-256 de 256 bits.',
-        'security'
-      );
-      return { success: true, message: 'Clave de Propietario actualizada exitosamente.' };
+      return {
+        success: false,
+        message: 'Conecta tu sesión de Propietario con tu token HMAC-SHA256 para cambiar la clave en la base de datos SQL.'
+      };
     }
 
     if (isDemoAccount) {
@@ -2419,6 +3237,318 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return newRecord;
   };
 
+  const createLiveGatewayInvoice = async (params: {
+    tier: CoinPackageTier;
+    paymentMethod: PaymentMethodType;
+    usdtNetwork: UsdtNetwork;
+    gatewayProvider: string;
+  }): Promise<{
+    ok: boolean;
+    order?: CoinPurchaseOrder;
+    checkoutUrl?: string | null;
+    isLiveApi?: boolean;
+    gatewayNotice?: string;
+    error?: string;
+  }> => {
+    const { tier, paymentMethod, usdtNetwork, gatewayProvider } = params;
+    if (!authToken) {
+      return {
+        ok: false,
+        error: 'Conecta tu cuenta (ej. tester01 o tu usuario real) en "Seguridad / Sesión" para generar la factura en el servidor.'
+      };
+    }
+
+    try {
+      const res = await fetch('/api/payments/create-gateway-invoice', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          tierLevel: tier.level,
+          tierName: tier.name,
+          coinsAmount: tier.coins,
+          priceUSD: tier.priceUSD,
+          paymentMethod,
+          usdtNetwork,
+          gatewayProvider
+        })
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        order?: CoinPurchaseOrder;
+        checkoutUrl?: string | null;
+        isLiveApi?: boolean;
+        gatewayNotice?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.order) {
+        return { ok: false, error: data.error || 'No se pudo generar la orden de pasarela.' };
+      }
+
+      logVmExperience({
+        userEmail,
+        category: 'PAYMENT_FLOW',
+        gameName: gatewayProvider,
+        severity: 'INFO',
+        summary: `Factura creada #${data.order.id.slice(-6)} ($${tier.priceUSD} USD -> ${tier.coins} mo) vía ${gatewayProvider} [LiveAPI=${data.isLiveApi ? 'SI' : 'SANDBOX'}]`,
+        details: { invoiceId: data.order.gatewayInvoiceId, wallet: data.order.destinationUsdtWallet }
+      });
+
+      return {
+        ok: true,
+        order: data.order,
+        checkoutUrl: data.checkoutUrl || null,
+        isLiveApi: data.isLiveApi,
+        gatewayNotice: data.gatewayNotice
+      };
+    } catch {
+      return { ok: false, error: 'Error de red contactando /api/payments/create-gateway-invoice.' };
+    }
+  };
+
+  const capturePayPalOrder = useCallback(
+    async (
+      paypalOrderId: string,
+      localOrderId?: string
+    ): Promise<{ ok: boolean; message: string; updatedCoinsBalance?: number }> => {
+      if (!authToken) {
+        return { ok: false, message: 'Inicia sesión para acreditar la orden PayPal.' };
+      }
+      try {
+        const res = await fetch('/api/payments/paypal/capture-order', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`
+          },
+          body: JSON.stringify({ paypalOrderId, localOrderId })
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          message?: string;
+          error?: string;
+          updatedCoinsBalance?: number;
+          order?: CoinPurchaseOrder;
+        };
+        if (!res.ok || !data.ok) {
+          const errMsg = data.error || 'No se pudo capturar la orden PayPal.';
+          addNotification('PayPal Checkout', errMsg, 'security');
+          return { ok: false, message: errMsg };
+        }
+        if (typeof data.updatedCoinsBalance === 'number') {
+          setCoins(data.updatedCoinsBalance);
+          try {
+            localStorage.setItem(STORAGE_KEY_COINS, String(data.updatedCoinsBalance));
+          } catch {
+            // ignore
+          }
+        }
+        setHasConfirmedRealDeposit(true);
+        try {
+          localStorage.setItem('aethervault_real_deposit_v1', 'true');
+        } catch {
+          // ignore
+        }
+        if (data.order) {
+          const rec: TransactionRecord = {
+            id: 'tx_pp_' + Date.now(),
+            timestamp: Date.now(),
+            type: 'RECHARGE',
+            title: `Recarga PayPal: ${data.order.tierName} (+${data.order.coinsAmount} mo)`,
+            description: `Orden PayPal capturada (${data.order.txHash || paypalOrderId}).`,
+            amountCoins: data.order.coinsAmount,
+            amountUSD: data.order.priceUSD,
+            paymentMethod: 'paypal',
+            status: 'COMPLETED',
+            txHash: data.order.txHash || paypalOrderId,
+            biometricVerified: true
+          };
+          setTransactions(prev => [rec, ...prev]);
+        }
+        soundFx.playWinFanfare();
+        confetti({ particleCount: 90, spread: 75 });
+        addNotification('Pago PayPal Acreditado', data.message || 'Monedas acreditadas.', 'reward', data.order?.coinsAmount);
+        return { ok: true, message: data.message || 'Pago acreditado.', updatedCoinsBalance: data.updatedCoinsBalance };
+      } catch {
+        return { ok: false, message: 'Error de red capturando orden PayPal.' };
+      }
+    },
+    [authToken, addNotification]
+  );
+
+  // Auto-detect PayPal redirect (?paypal_capture=1&token=<PAYPAL_ORDER_ID>) when returning from PayPal Checkout
+  useEffect(() => {
+    if (!authToken) return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const isCapture = params.get('paypal_capture') === '1';
+      const token = params.get('token');
+      if (isCapture && token) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+        void capturePayPalOrder(token);
+      } else if (params.get('paypal_cancel') === '1') {
+        window.history.replaceState({}, document.title, window.location.pathname);
+        addNotification('PayPal Cancelado', 'El pago en PayPal fue cancelado por el usuario.', 'info');
+      }
+    } catch {
+      // ignore
+    }
+  }, [authToken, capturePayPalOrder, addNotification]);
+
+  // Direct USDT / Gateway Purchase Order Creation & Anti-Replay Verification
+  const settleCoinPurchaseWithUsdt = async (params: {
+    tier: CoinPackageTier;
+    paymentMethod: PaymentMethodType;
+    usdtNetwork: UsdtNetwork;
+    txHash: string;
+    biometricVerified: boolean;
+    existingOrderId?: string;
+    gatewayProvider?: string;
+  }): Promise<{ ok: boolean; error?: string; record?: TransactionRecord; destinationWallet?: string }> => {
+    const { tier, paymentMethod, usdtNetwork, txHash, biometricVerified, existingOrderId, gatewayProvider } = params;
+    const cleanTx = txHash.trim();
+
+    const destWallet =
+      usdtNetwork === 'ERC20'
+        ? payoutConfig.usdtErc20Address
+        : usdtNetwork === 'BEP20'
+        ? payoutConfig.usdtBep20Address || payoutConfig.usdtErc20Address
+        : payoutConfig.usdtTrc20Address;
+
+    if (authToken) {
+      try {
+        let targetOrderId = existingOrderId;
+        let resolvedWallet = destWallet;
+
+        if (!targetOrderId) {
+          const createRes = await fetch('/api/payments/create-gateway-invoice', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+              tierLevel: tier.level,
+              tierName: tier.name,
+              coinsAmount: tier.coins,
+              priceUSD: tier.priceUSD,
+              paymentMethod,
+              usdtNetwork,
+              gatewayProvider: gatewayProvider || (paymentMethod === 'crypto_usdt' ? 'DIRECT_USDT' : 'ONRAMP_CARD')
+            })
+          });
+          const createData = (await createRes.json().catch(() => ({}))) as {
+            order?: { id: string; destinationUsdtWallet: string };
+            error?: string;
+          };
+          if (!createRes.ok || !createData.order) {
+            return { ok: false, error: createData.error || 'No se pudo generar la orden en la bóveda USDT.' };
+          }
+          targetOrderId = createData.order.id;
+          resolvedWallet = createData.order.destinationUsdtWallet;
+        }
+
+        const effectiveTx =
+          cleanTx ||
+          (paymentMethod !== 'crypto_usdt'
+            ? `VM-TEST-${Date.now()}-${Math.random().toString(16).slice(2, 10).toUpperCase()}`
+            : '');
+
+        if (!effectiveTx) {
+          return { ok: false, error: 'Ingresa el TXID / Hash de tu transferencia USDT.' };
+        }
+
+        const verifyRes = await fetch('/api/payments/verify-usdt-order', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`
+          },
+          body: JSON.stringify({
+            orderId: targetOrderId,
+            txHash: effectiveTx
+          })
+        });
+        const verifyData = (await verifyRes.json().catch(() => ({}))) as {
+          ok?: boolean;
+          error?: string;
+          updatedCoinsBalance?: number;
+          order?: { destinationUsdtWallet: string; gatewayProvider?: string };
+        };
+
+        if (!verifyRes.ok || !verifyData.ok) {
+          return {
+            ok: false,
+            error: verifyData.error || 'El servidor rechazó la verificación del pago.'
+          };
+        }
+
+        const settledWallet = verifyData.order?.destinationUsdtWallet || resolvedWallet;
+        const usedGateway = verifyData.order?.gatewayProvider || gatewayProvider || paymentMethod;
+        const newRecord: TransactionRecord = {
+          id: 'tx_usdt_' + Date.now(),
+          timestamp: Date.now(),
+          type: 'RECHARGE',
+          title: `Compra (${usedGateway} / ${usdtNetwork}) - ${tier.name}`,
+          description: `Liquidado a bóveda USDT (${settledWallet.slice(0, 12)}...): +${tier.coins} monedas ($${tier.priceUSD} USD vía ${usedGateway})`,
+          amountCoins: tier.coins,
+          amountUSD: tier.priceUSD,
+          paymentMethod,
+          status: 'SECURED',
+          txHash: effectiveTx,
+          biometricVerified
+        };
+
+        if (typeof verifyData.updatedCoinsBalance === 'number' && !isOwner && !isDemoAccount) {
+          setCoins(verifyData.updatedCoinsBalance);
+        } else {
+          setCoins(prev => prev + tier.coins);
+        }
+        if (!isDemoAccount) {
+          setHasConfirmedRealDeposit(true);
+          try {
+            localStorage.setItem('aethervault_real_deposit_v1', 'true');
+          } catch {
+            // ignore
+          }
+        }
+        setTransactions(prev => [newRecord, ...prev]);
+
+        soundFx.playCoinChime();
+        confetti({
+          particleCount: tier.coins >= 200 ? 120 : 60,
+          spread: 70,
+          origin: { y: 0.6 }
+        });
+
+        addNotification(
+          `¡Depósito Liquidado (${usedGateway} → USDT ${usdtNetwork})!`,
+          `+$${tier.priceUSD} USD liquidados hacia ${settledWallet.slice(0, 10)}... y +${tier.coins} monedas acreditadas.`,
+          'success',
+          tier.coins
+        );
+
+        logVmExperience({
+          userEmail,
+          category: 'PAYMENT_FLOW',
+          gameName: 'STORE_USDT',
+          severity: 'INFO',
+          summary: `Compra real liquidada ($${tier.priceUSD} USD -> +${tier.coins} mo) vía ${usedGateway} hacia USDT ${usdtNetwork}`,
+          details: { txHash: effectiveTx, wallet: settledWallet, orderId: targetOrderId }
+        });
+
+        return { ok: true, record: newRecord, destinationWallet: settledWallet };
+      } catch {
+        // Fallback below if offline
+      }
+    }
+
+    // Fallback when running without backend token
+    const record = await rechargeCoins(tier, paymentMethod, biometricVerified);
+    return { ok: true, record, destinationWallet: destWallet };
+  };
+
   // Execute a Provably Fair Casino Bet or Arena outcome
   const executeBet = async (
     game: 'Roulette' | 'Blackjack' | 'Poker' | 'Arena' | 'Top50Casino',
@@ -2448,7 +3578,23 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     const netChange = finalWin - betAmount;
-    setCoins(prev => prev + netChange);
+    const projectedNextCoins = Math.max(0, coins + netChange);
+    setCoins(prev => Math.max(0, prev + netChange));
+
+    // Persist gameplay winnings/losses authoritatively to SQLite for real & tester accounts (never isolated DEMO)
+    if (authToken && !isDemoAccount) {
+      void fetch('/api/player/balance-sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          coinsBalance: projectedNextCoins,
+          reason: `${game}:${won ? 'WIN' : 'BET'}`
+        })
+      }).catch(() => {});
+    }
 
     // Cryptographic round proof
     const serverSeed = generateRandomHex(32);
@@ -2525,6 +3671,15 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       })
     );
 
+    logVmExperience({
+      userEmail,
+      category: 'GAME_ACTION',
+      gameName: game,
+      severity: 'INFO',
+      summary: `${game}: apuesta ${betAmount} mo -> ${won ? `ganó ${finalWin} mo` : 'sin premio'} (${details.slice(0, 80)})`,
+      details: { betAmount, finalWin, netChange, won }
+    });
+
     return { won, net: netChange, round: roundProof };
   };
 
@@ -2567,18 +3722,23 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsHistoryModalOpen,
         userEmail,
         authToken,
+        firebaseUser,
+        firestoreSyncedBalance,
         isOwner,
         isDemoAccount,
         isRealAccountActive,
         loginUser,
         loginOwnerWithKey,
         loginDemoUser,
+        loginVmTester,
         resetDemoFunds,
         activateRealAccountWithDeposit,
         logoutUser,
         isAuthModalOpen,
         setIsAuthModalOpen,
         payoutConfig,
+        gatewayAvailability,
+        refreshPayoutConfigFromServer,
         updatePayoutConfig,
         adminWithdrawals,
         executeAdminWithdrawal,
@@ -2605,9 +3765,19 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         vaultRetentionRate,
         playerPrizeRate,
         redemptionFeeRate,
+        transferFeeRate,
         updateVaultMargins,
         vaultEconomics,
+        directoryPlayers,
+        transfersHistory,
+        refreshTransfersAndDirectory,
+        transferCoinsToPlayer,
+        capturePayPalOrder,
         redemptionRequests,
+        redeemableUsers,
+        refreshRedemptionsFromServer,
+        validateAndCreateAdminRedemption,
+        syncRedemptionToFirestore,
         requestPlayerRedemption,
         approveRedemptionRequest,
         rejectRedemptionRequest,
@@ -2632,6 +3802,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isHappyHourActiveForGame,
         unlockNextHeroLevel,
         rechargeCoins,
+        createLiveGatewayInvoice,
+        settleCoinPurchaseWithUsdt,
         upgradeSkill,
         getSkillUpgradeCost,
         executeBet,
@@ -2640,6 +3812,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         clearAllNotifications,
         isSupportPanelOpen,
         setIsSupportPanelOpen,
+        isTransferModalOpen,
+        setIsTransferModalOpen,
         supportTickets,
         createSupportTicket,
         replyToTicket,

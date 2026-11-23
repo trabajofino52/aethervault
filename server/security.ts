@@ -70,7 +70,7 @@ export function sanitizeBodyMiddleware(req: Request, _res: Response, next: NextF
 }
 
 /**
- * In-Memory Sliding Window Rate Limiter (Global + Strict Auth Anti-Brute-Force)
+ * In-Memory Sliding Window Rate Limiter + WAF + CSRF Telemetry
  */
 interface Bucket {
   timestamps: number[];
@@ -78,12 +78,172 @@ interface Bucket {
 
 const rateBuckets = new Map<string, Bucket>();
 let blockedRequestsCount = 0;
+let wafBlockedCount = 0;
+let csrfBlockedCount = 0;
 
-export function getRateLimiterStats(): { activeBuckets: number; blockedRequestsCount: number } {
+export function getRateLimiterStats(): {
+  activeBuckets: number;
+  blockedRequestsCount: number;
+  wafBlockedCount: number;
+  csrfBlockedCount: number;
+} {
   return {
     activeBuckets: rateBuckets.size,
-    blockedRequestsCount
+    blockedRequestsCount,
+    wafBlockedCount,
+    csrfBlockedCount
   };
+}
+
+const WAF_PATTERNS: RegExp[] = [
+  /<script\b[^>]*>/i,
+  /javascript\s*:/i,
+  /\bon(error|load|click|mouseover)\s*=/i,
+  /(\.\.\/|\.\.\\)/,
+  /\0/,
+  /\bunion\s+(all\s+)?select\b/i,
+  /\b(drop|truncate|alter)\s+table\b/i,
+  /(['"`])\s*or\s+\1?\s*1\s*=\s*1/i
+];
+
+function containsWafThreat(value: unknown, depth: number = 0): string | null {
+  if (depth > 6) return null;
+  if (typeof value === 'string') {
+    for (const pattern of WAF_PATTERNS) {
+      if (pattern.test(value)) {
+        return pattern.source;
+      }
+    }
+    return null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = containsWafThreat(item, depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (value && typeof value === 'object') {
+    for (const v of Object.values(value as Record<string, unknown>)) {
+      const hit = containsWafThreat(v, depth + 1);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+/**
+ * Lightweight Application WAF Middleware (SQLi, XSS, Path Traversal, Null-byte & HTTP Method Shield)
+ */
+export function wafInspectionMiddleware(req: Request, res: Response, next: NextFunction): void {
+  if (req.method === 'TRACE' || req.method === 'TRACK' || req.method === 'DEBUG') {
+    wafBlockedCount += 1;
+    res.status(405).json({ error: 'Método HTTP no permitido por política de seguridad.' });
+    return;
+  }
+
+  const rawTarget = `${req.path} ${JSON.stringify(req.query || {})}`;
+  const urlHit = containsWafThreat(rawTarget);
+  const bodyHit = req.body ? containsWafThreat(req.body) : null;
+  const hit = urlHit || bodyHit;
+
+  if (hit) {
+    wafBlockedCount += 1;
+    const ip = extractClientIp(req);
+    try {
+      appendAuditLog(
+        'WAF_SENSOR',
+        ip,
+        'WAF_BLOCKED_PAYLOAD',
+        'CRITICAL',
+        `Patrón malicioso bloqueado en ${req.method} ${req.path} (firma detectada).`
+      );
+    } catch {
+      // ignore logging error
+    }
+    res.status(403).json({
+      error: 'Solicitud bloqueada por el cortafuegos de aplicación (WAF).'
+    });
+    return;
+  }
+
+  next();
+}
+
+function isAllowedOriginHost(originUrl: string, requestHost: string | undefined): boolean {
+  try {
+    const parsed = new URL(originUrl);
+    const originHost = parsed.host.toLowerCase();
+    const reqHost = (requestHost || '').toLowerCase();
+    if (reqHost && originHost === reqHost) return true;
+
+    const hostname = parsed.hostname.toLowerCase();
+    if (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '::1' ||
+      hostname.startsWith('192.168.') ||
+      hostname.startsWith('10.') ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
+      hostname.endsWith('.run.app') ||
+      hostname.endsWith('.ngrok-free.app') ||
+      hostname.endsWith('.ngrok-free.dev') ||
+      hostname.endsWith('.ngrok.app') ||
+      hostname.endsWith('.ngrok.io')
+    ) {
+      return true;
+    }
+
+    const extraAllowed = (process.env.ALLOWED_ORIGINS || '')
+      .split(',')
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean);
+    if (extraAllowed.includes(originUrl.toLowerCase()) || extraAllowed.includes(hostname)) {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+/**
+ * CSRF / Cross-Origin State-Changing Request Guard
+ */
+export function originGuardMiddleware(req: Request, res: Response, next: NextFunction): void {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+    next();
+    return;
+  }
+
+  // External payment webhooks (BTCPay, PayPal) verify requests cryptographically instead of browser Origin
+  if (req.path.startsWith('/api/webhooks/')) {
+    next();
+    return;
+  }
+
+  const origin = req.headers.origin;
+  if (typeof origin === 'string' && origin.length > 0) {
+    if (!isAllowedOriginHost(origin, req.headers.host)) {
+      csrfBlockedCount += 1;
+      const ip = extractClientIp(req);
+      try {
+        appendAuditLog(
+          'CSRF_GUARD',
+          ip,
+          'CSRF_ORIGIN_BLOCKED',
+          'CRITICAL',
+          `Origen cruzado no autorizado (${origin}) bloqueado en ${req.method} ${req.path}.`
+        );
+      } catch {
+        // ignore
+      }
+      res.status(403).json({ error: 'Origen de petición no autorizado (Protección CSRF).' });
+      return;
+    }
+  }
+
+  next();
 }
 
 export function createRateLimiter(options: { windowMs: number; maxRequests: number; bucketPrefix: string }) {

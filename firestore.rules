@@ -1,0 +1,427 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ------------------------------------------------------------------------
+    // Global Hardened Primitives
+    // ------------------------------------------------------------------------
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedEmail() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedEmail() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isVerifiedEmail() && (
+        request.auth.token.email == 'trabajofino52@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // ------------------------------------------------------------------------
+    // Entity Validation Blueprints (Mirroring firebase-blueprint.json)
+    // ------------------------------------------------------------------------
+    function isValidUserAccount(data) {
+      return data.keys().hasAll([
+          'uid', 'email', 'displayName', 'role', 'coinsBalance',
+          'level', 'xp', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'role', 'coinsBalance',
+          'level', 'xp', 'devicePlatform', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.uid) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+        (data.role == 'OWNER' || data.role == 'PLAYER') &&
+        data.coinsBalance is number && data.coinsBalance >= 0 && data.coinsBalance <= 100000000 &&
+        data.level is number && data.level >= 1 && data.level <= 100 &&
+        data.xp is number && data.xp >= 0 &&
+        (!('devicePlatform' in data) || (data.devicePlatform is string && data.devicePlatform.size() <= 80)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUserBalanceLedger(data) {
+      return data.keys().hasAll([
+          'balanceId', 'email', 'coinsBalance', 'totalDepositedUSD',
+          'lastInvoiceId', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'balanceId', 'email', 'coinsBalance', 'totalDepositedUSD',
+          'lastInvoiceId', 'lastTxConfirmation', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.balanceId) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        data.coinsBalance is number && data.coinsBalance >= 0 && data.coinsBalance <= 100000000 &&
+        data.totalDepositedUSD is number && data.totalDepositedUSD >= 0 &&
+        data.lastInvoiceId is string && data.lastInvoiceId.size() <= 128 &&
+        (!('lastTxConfirmation' in data) || (data.lastTxConfirmation is string && data.lastTxConfirmation.size() <= 128)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidBtcpayWebhookEvent(data) {
+      return data.keys().hasAll([
+          'eventId', 'deliveryId', 'invoiceId', 'eventType', 'userEmail',
+          'coinsCredited', 'amountUSD', 'blockchainConfirmed', 'signatureVerified',
+          'status', 'processedByEmail', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'eventId', 'deliveryId', 'invoiceId', 'eventType', 'userEmail',
+          'coinsCredited', 'amountUSD', 'blockchainConfirmed', 'signatureVerified',
+          'status', 'processedByEmail', 'createdAt'
+        ]) &&
+        isValidId(data.eventId) &&
+        data.deliveryId is string && data.deliveryId.size() >= 1 && data.deliveryId.size() <= 128 &&
+        data.invoiceId is string && data.invoiceId.size() >= 1 && data.invoiceId.size() <= 128 &&
+        data.eventType in [
+          'InvoiceSettled', 'InvoicePaymentSettled', 'InvoiceProcessing',
+          'InvoiceExpired', 'InvoiceInvalid', 'ManualTest'
+        ] &&
+        data.userEmail is string && data.userEmail.size() >= 3 && data.userEmail.size() <= 160 &&
+        data.coinsCredited is number && data.coinsCredited >= 0 &&
+        data.amountUSD is number && data.amountUSD >= 0 &&
+        data.blockchainConfirmed is bool &&
+        data.signatureVerified is bool &&
+        data.status in ['CREDITED', 'IGNORED_EVENT', 'FAILED'] &&
+        data.processedByEmail is string && data.processedByEmail.size() >= 3 && data.processedByEmail.size() <= 160 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidVaultConfigRecord(data) {
+      return data.keys().hasAll([
+          'configId', 'ownerUid', 'ownerEmail', 'btcpayEnabled',
+          'maxClientWithdrawalPct', 'requiresOwnerAuth', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'configId', 'ownerUid', 'ownerEmail', 'btcpayEnabled', 'btcpayServerUrl',
+          'btcpayStoreId', 'nowpaymentsEnabled', 'coingateEnabled', 'activeOnRamp',
+          'preferredVirtualCard', 'maxClientWithdrawalPct', 'requiresOwnerAuth',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.configId) &&
+        data.configId.size() <= 64 &&
+        isValidId(data.ownerUid) &&
+        data.ownerEmail is string && data.ownerEmail.size() >= 3 && data.ownerEmail.size() <= 160 &&
+        data.btcpayEnabled is bool &&
+        (!('btcpayServerUrl' in data) || (data.btcpayServerUrl is string && data.btcpayServerUrl.size() <= 300)) &&
+        (!('btcpayStoreId' in data) || (data.btcpayStoreId is string && data.btcpayStoreId.size() <= 128)) &&
+        (!('nowpaymentsEnabled' in data) || data.nowpaymentsEnabled is bool) &&
+        (!('coingateEnabled' in data) || data.coingateEnabled is bool) &&
+        (!('activeOnRamp' in data) || (data.activeOnRamp is string && data.activeOnRamp.size() <= 64)) &&
+        (!('preferredVirtualCard' in data) || (data.preferredVirtualCard is string && data.preferredVirtualCard.size() <= 64)) &&
+        data.maxClientWithdrawalPct is number && data.maxClientWithdrawalPct == 30 &&
+        data.requiresOwnerAuth is bool && data.requiresOwnerAuth == true &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRegistry(data) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'createdAt']) &&
+        isValidId(data.uid) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidRedemptionRequest(data) {
+      return data.keys().hasAll([
+          'requestId', 'playerEmail', 'playerName', 'balanceBeforeCoins',
+          'maxAllowed30PctCoins', 'amountCoins', 'grossUSD', 'feeUSD', 'netUSD',
+          'destinationType', 'destinationAddress', 'status', 'awaitingAuthorization',
+          'txHash', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'requestId', 'playerEmail', 'playerName', 'balanceBeforeCoins',
+          'maxAllowed30PctCoins', 'requestedOriginalCoins', 'cappedAutomatically',
+          'amountCoins', 'grossUSD', 'feeUSD', 'netUSD',
+          'destinationType', 'destinationAddress', 'status', 'awaitingAuthorization',
+          'authorizedByEmail', 'rejectionReason', 'txHash',
+          'createdAt', 'reviewedAt', 'updatedAt'
+        ]) &&
+        isValidId(data.requestId) &&
+        data.playerEmail is string && data.playerEmail.size() >= 3 && data.playerEmail.size() <= 160 &&
+        data.playerName is string && data.playerName.size() >= 1 && data.playerName.size() <= 80 &&
+        data.balanceBeforeCoins is number && data.balanceBeforeCoins > 0 &&
+        data.maxAllowed30PctCoins is number && data.maxAllowed30PctCoins >= 0 &&
+        data.maxAllowed30PctCoins * 100 <= data.balanceBeforeCoins * 30 &&
+        (!('requestedOriginalCoins' in data) || (data.requestedOriginalCoins is number && data.requestedOriginalCoins > 0)) &&
+        (!('cappedAutomatically' in data) || data.cappedAutomatically is bool) &&
+        data.amountCoins is number && data.amountCoins > 0 &&
+        data.amountCoins <= data.maxAllowed30PctCoins &&
+        data.grossUSD is number && data.grossUSD > 0 &&
+        data.feeUSD is number && data.feeUSD >= 0 &&
+        data.netUSD is number && data.netUSD > 0 &&
+        data.destinationType in ['crypto_usdt', 'crypto_monero', 'crypto_btc', 'paypal', 'bank_wire'] &&
+        data.destinationAddress is string && data.destinationAddress.size() >= 1 && data.destinationAddress.size() <= 200 &&
+        data.status in ['PENDING_APPROVAL', 'APPROVED', 'REJECTED'] &&
+        data.awaitingAuthorization is bool &&
+        (!('authorizedByEmail' in data) || (data.authorizedByEmail is string && data.authorizedByEmail.size() >= 3 && data.authorizedByEmail.size() <= 160)) &&
+        (!('rejectionReason' in data) || (data.rejectionReason is string && data.rejectionReason.size() <= 240)) &&
+        data.txHash is string && data.txHash.size() >= 8 && data.txHash.size() <= 128 &&
+        data.createdAt is timestamp &&
+        (!('reviewedAt' in data) || data.reviewedAt is timestamp) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAuditTrailEntry(data) {
+      return data.keys().hasAll([
+          'entryId', 'seq', 'category', 'action', 'severity',
+          'actorEmail', 'ipAddress', 'details', 'rowHash',
+          'syncedByEmail', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'entryId', 'seq', 'category', 'action', 'severity',
+          'actorEmail', 'ipAddress', 'details', 'rowHash',
+          'syncedByEmail', 'createdAt'
+        ]) &&
+        isValidId(data.entryId) &&
+        data.seq is number && data.seq >= 1 &&
+        data.category in ['FINANCIAL', 'API_CONFIG', 'AUTHORIZATION', 'SECURITY'] &&
+        data.action is string && data.action.size() >= 1 && data.action.size() <= 80 &&
+        data.severity in ['INFO', 'WARN', 'CRITICAL'] &&
+        data.actorEmail is string && data.actorEmail.size() >= 3 && data.actorEmail.size() <= 160 &&
+        data.ipAddress is string && data.ipAddress.size() >= 1 && data.ipAddress.size() <= 64 &&
+        data.details is string && data.details.size() >= 1 && data.details.size() <= 500 &&
+        data.rowHash is string && data.rowHash.size() >= 16 && data.rowHash.size() <= 128 &&
+        data.syncedByEmail is string && data.syncedByEmail.size() >= 3 && data.syncedByEmail.size() <= 160 &&
+        data.createdAt is timestamp;
+    }
+
+    // ------------------------------------------------------------------------
+    // Connection Probe Collection (Read-Only Health Check)
+    // ------------------------------------------------------------------------
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+      allow list, write: if false;
+    }
+
+    // ------------------------------------------------------------------------
+    // Admin Registry
+    // ------------------------------------------------------------------------
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && (isOwner(adminUid) || isAdmin());
+      allow list: if false;
+      allow create: if isValidId(adminUid) && isAdmin() &&
+        isValidAdminRegistry(incoming()) &&
+        incoming().uid == adminUid &&
+        incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------------------
+    // Users (Cross-Device Profile & Synced Gameplay State)
+    // ------------------------------------------------------------------------
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isVerifiedEmail() && (
+        isAdmin() ||
+        resource.data.uid == request.auth.uid
+      );
+
+      allow create: if isValidId(userId) && isVerifiedEmail() &&
+        isValidUserAccount(incoming()) &&
+        incoming().uid == userId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          (isAdmin() && incoming().uid == request.auth.uid) ||
+          (
+            isOwner(userId) &&
+            incoming().email == request.auth.token.email &&
+            incoming().role == 'PLAYER' &&
+            incoming().coinsBalance == 0
+          )
+        );
+
+      allow update: if isValidId(userId) && isValidUserAccount(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().email == existing().email &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            isAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'coinsBalance', 'displayName', 'level', 'xp', 'devicePlatform', 'role', 'updatedAt'
+            ])
+          ) ||
+          (
+            isOwner(userId) &&
+            incoming().role == existing().role &&
+            incoming().coinsBalance == existing().coinsBalance &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'level', 'xp', 'devicePlatform', 'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------------------
+    // Authoritative User Coin Balance Ledger (Credited by BTCPay Webhooks)
+    // ------------------------------------------------------------------------
+    match /user_balances/{balanceId} {
+      allow get: if isValidId(balanceId) && isVerifiedEmail() && (
+        isAdmin() ||
+        (resource != null && existing().email == request.auth.token.email)
+      );
+      allow list: if isVerifiedEmail() && (
+        isAdmin() ||
+        resource.data.email == request.auth.token.email
+      );
+
+      allow create: if isValidId(balanceId) && isAdmin() &&
+        isValidUserBalanceLedger(incoming()) &&
+        incoming().balanceId == balanceId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isValidId(balanceId) && isAdmin() &&
+        isValidUserBalanceLedger(incoming()) &&
+        incoming().balanceId == existing().balanceId &&
+        incoming().email == existing().email &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'coinsBalance', 'totalDepositedUSD', 'lastInvoiceId', 'lastTxConfirmation', 'updatedAt'
+        ]);
+
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------------------
+    // BTCPay Server Blockchain Webhook Events (Idempotent & Append-Only)
+    // ------------------------------------------------------------------------
+    match /btcpay_webhooks/{eventId} {
+      allow get: if isValidId(eventId) && isAdmin();
+      allow list: if isAdmin();
+
+      allow create: if isValidId(eventId) && isAdmin() &&
+        isValidBtcpayWebhookEvent(incoming()) &&
+        incoming().eventId == eventId &&
+        incoming().processedByEmail == request.auth.token.email &&
+        incoming().createdAt == request.time;
+
+      allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------------------
+    // VaultConfigPanel Cross-Device Settings (Owner Only)
+    // ------------------------------------------------------------------------
+    match /vault_configs/{configId} {
+      allow get: if isValidId(configId) && isAdmin();
+      allow list: if isAdmin();
+
+      allow create: if isValidId(configId) && isAdmin() &&
+        isValidVaultConfigRecord(incoming()) &&
+        incoming().configId == configId &&
+        incoming().ownerUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isValidId(configId) && isAdmin() &&
+        isValidVaultConfigRecord(incoming()) &&
+        incoming().configId == existing().configId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().ownerEmail == existing().ownerEmail &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'btcpayEnabled', 'btcpayServerUrl', 'btcpayStoreId',
+          'nowpaymentsEnabled', 'coingateEnabled', 'activeOnRamp',
+          'preferredVirtualCard', 'updatedAt'
+        ]);
+
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------------------
+    // Withdrawal Redemption Requests (Auto-30% Cap + Manual Owner Authorization)
+    // ------------------------------------------------------------------------
+    match /redemption_requests/{requestId} {
+      allow get: if isValidId(requestId) && isVerifiedEmail() && (
+        isAdmin() ||
+        (resource != null && existing().playerEmail == request.auth.token.email)
+      );
+      allow list: if isVerifiedEmail() && (
+        isAdmin() ||
+        resource.data.playerEmail == request.auth.token.email
+      );
+
+      allow create: if isValidId(requestId) && isVerifiedEmail() &&
+        isValidRedemptionRequest(incoming()) &&
+        incoming().requestId == requestId &&
+        (isAdmin() || incoming().playerEmail == request.auth.token.email) &&
+        incoming().status == 'PENDING_APPROVAL' &&
+        incoming().awaitingAuthorization == true &&
+        !('authorizedByEmail' in incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isValidId(requestId) && isAdmin() &&
+        isValidRedemptionRequest(incoming()) &&
+        existing().awaitingAuthorization == true &&
+        existing().status == 'PENDING_APPROVAL' &&
+        incoming().requestId == existing().requestId &&
+        incoming().playerEmail == existing().playerEmail &&
+        incoming().balanceBeforeCoins == existing().balanceBeforeCoins &&
+        incoming().maxAllowed30PctCoins == existing().maxAllowed30PctCoins &&
+        incoming().amountCoins == existing().amountCoins &&
+        incoming().txHash == existing().txHash &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().awaitingAuthorization == false &&
+        incoming().status in ['APPROVED', 'REJECTED'] &&
+        incoming().authorizedByEmail == request.auth.token.email &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'status', 'awaitingAuthorization', 'authorizedByEmail',
+          'rejectionReason', 'reviewedAt', 'updatedAt'
+        ]);
+
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------------------
+    // Immutable Owner-Only Audit Trail (/audit_trail)
+    // ------------------------------------------------------------------------
+    match /audit_trail/{entryId} {
+      allow get: if isValidId(entryId) && isAdmin();
+      allow list: if isAdmin();
+
+      allow create: if isValidId(entryId) && isAdmin() &&
+        isValidAuditTrailEntry(incoming()) &&
+        incoming().entryId == entryId &&
+        incoming().syncedByEmail == request.auth.token.email &&
+        incoming().createdAt == request.time;
+
+      allow update, delete: if false;
+    }
+  }
+}

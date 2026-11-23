@@ -1,29 +1,35 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   useGame,
   OWNER_EMAIL,
   DEMO_USERNAME,
   DEMO_PASSWORD,
-  DEMO_INITIAL_USD
+  VM_TESTER_DEFAULT_PASS
 } from '../context/GameContext';
 import {
-  User,
   ShieldCheck,
   CheckCircle2,
   X,
   Mail,
   Lock,
-  ArrowRight,
   LogOut,
   Sparkles,
   KeyRound,
   Eye,
   EyeOff,
   AlertTriangle,
-  Landmark,
-  Coins
+  Users
 } from 'lucide-react';
 import { soundFx } from '../utils/audio';
+
+const VM_TESTER_SLOTS = Array.from({ length: 10 }, (_, idx) => {
+  const num = String(idx + 1).padStart(2, '0');
+  return {
+    alias: `tester${num}`,
+    email: `tester${num}@vm.aethervault.local`,
+    label: `Tester #${num}`
+  };
+});
 
 export const AuthModal: React.FC = () => {
   const {
@@ -32,11 +38,10 @@ export const AuthModal: React.FC = () => {
     userEmail,
     isOwner,
     isDemoAccount,
-    isRealAccountActive,
     loginUser,
     loginOwnerWithKey,
     loginDemoUser,
-    resetDemoFunds,
+    loginVmTester,
     logoutUser
   } = useGame();
 
@@ -45,13 +50,19 @@ export const AuthModal: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
+  const [selectedVmTester, setSelectedVmTester] = useState('tester01');
+  const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
   if (!isAuthModalOpen) return null;
 
-  const isOwnerTarget = inputEmail.trim().toLowerCase() === OWNER_EMAIL.toLowerCase();
+  const cleanInputLower = inputEmail.trim().toLowerCase();
+  const isOwnerTarget = cleanInputLower === OWNER_EMAIL.toLowerCase();
   const isDemoTarget =
-    inputEmail.trim().toLowerCase() === DEMO_USERNAME.toLowerCase() ||
-    inputEmail.trim().toLowerCase() === 'gokudemo@aethervault.com';
+    cleanInputLower === DEMO_USERNAME.toLowerCase() ||
+    cleanInputLower === 'gokudemo@aethervault.com';
+  const isVmTesterTarget =
+    /^tester(0[1-9]|10)$/.test(cleanInputLower) ||
+    cleanInputLower.endsWith('@vm.aethervault.local');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,9 +70,10 @@ export const AuthModal: React.FC = () => {
     const cleanEmail = inputEmail.trim();
     if (!cleanEmail) return;
 
-    if (cleanEmail.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
+    if (isOwnerTarget) {
       if (!inputPassword.trim()) {
-        setAuthError('Se requiere la clave maestra de 256 bits para acceder como Propietario.');
+        setAuthError('Ingresa tu clave de propietario para autenticar en la base de datos SQL.');
+        passwordInputRef.current?.focus();
         return;
       }
       setIsVerifying(true);
@@ -71,9 +83,9 @@ export const AuthModal: React.FC = () => {
         setIsAuthModalOpen(false);
         setInputPassword('');
       } else {
-        setAuthError('Clave de seguridad inválida. El hash SHA-256 (256-bit) no coincide con los registros.');
+        setAuthError('Clave incorrecta o bloqueo temporal activo. Verifica tu clave en la bóveda SQL.');
       }
-    } else if (cleanEmail.toLowerCase() === DEMO_USERNAME.toLowerCase() || cleanEmail.toLowerCase() === 'gokudemo@aethervault.com') {
+    } else if (isDemoTarget) {
       if (!inputPassword.trim()) {
         setAuthError(`Se requiere la clave para la cuenta demo ${DEMO_USERNAME} (${DEMO_PASSWORD}).`);
         return;
@@ -87,6 +99,20 @@ export const AuthModal: React.FC = () => {
       } else {
         setAuthError(`Clave de demo incorrecta. La clave requerida es: ${DEMO_PASSWORD}`);
       }
+    } else if (isVmTesterTarget) {
+      if (!inputPassword.trim()) {
+        setAuthError(`Ingresa la contraseña de prueba VM (${VM_TESTER_DEFAULT_PASS}).`);
+        return;
+      }
+      setIsVerifying(true);
+      const result = await loginVmTester(cleanEmail, inputPassword.trim());
+      setIsVerifying(false);
+      if (result.ok) {
+        setIsAuthModalOpen(false);
+        setInputPassword('');
+      } else {
+        setAuthError(result.error || 'No se pudo iniciar sesión como tester VM.');
+      }
     } else {
       loginUser(cleanEmail);
       setIsAuthModalOpen(false);
@@ -96,7 +122,12 @@ export const AuthModal: React.FC = () => {
 
   const handleQuickLoginOwnerPreset = () => {
     setInputEmail(OWNER_EMAIL);
+    setInputPassword('');
     setAuthError(null);
+    soundFx.playClick();
+    setTimeout(() => {
+      passwordInputRef.current?.focus();
+    }, 50);
   };
 
   const handleQuickLoginDemoPreset = async () => {
@@ -105,6 +136,27 @@ export const AuthModal: React.FC = () => {
     setAuthError(null);
     await loginDemoUser(DEMO_PASSWORD);
     setIsAuthModalOpen(false);
+  };
+
+  const handleSelectVmTesterPreset = (alias: string) => {
+    setSelectedVmTester(alias);
+    setInputEmail(alias);
+    setInputPassword(VM_TESTER_DEFAULT_PASS);
+    setAuthError(null);
+    soundFx.playClick();
+  };
+
+  const handleQuickConnectVmTester = async () => {
+    setIsVerifying(true);
+    setAuthError(null);
+    const result = await loginVmTester(selectedVmTester, VM_TESTER_DEFAULT_PASS);
+    setIsVerifying(false);
+    if (result.ok) {
+      setIsAuthModalOpen(false);
+      setInputPassword('');
+    } else {
+      setAuthError(result.error || 'Error conectando tester VM.');
+    }
   };
 
   const handleQuickLoginPlayerPreset = () => {
@@ -116,12 +168,6 @@ export const AuthModal: React.FC = () => {
     setIsAuthModalOpen(false);
   };
 
-  const handleAutoFillKey = () => {
-    setInputPassword('GokuCheckersMasterKey2024Secure');
-    setAuthError(null);
-    soundFx.playClick();
-  };
-
   const handleAutoFillDemoKey = () => {
     setInputPassword(DEMO_PASSWORD);
     setAuthError(null);
@@ -131,28 +177,29 @@ export const AuthModal: React.FC = () => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
       <div className="relative w-full max-w-lg bg-slate-900 border border-slate-700/80 rounded-3xl shadow-2xl p-6 text-slate-100 max-h-[92vh] overflow-y-auto">
-        
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-slate-800">
           <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
-              isOwner
-                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                : isDemoAccount
-                ? 'bg-purple-500/20 text-purple-400 border border-purple-500/40'
-                : 'bg-slate-800 text-slate-300 border border-slate-700'
-            }`}>
+            <div
+              className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
+                isOwner
+                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                  : isDemoAccount
+                  ? 'bg-purple-500/20 text-purple-400 border border-purple-500/40'
+                  : 'bg-slate-800 text-slate-300 border border-slate-700'
+              }`}
+            >
               <Lock className="w-5 h-5 text-amber-400" />
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-100 font-display flex items-center gap-2">
                 <span>Seguridad & Control de Sesión</span>
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">
-                  SHA-256 (256-bit)
+                  scrypt SQL
                 </span>
               </h3>
               <p className="text-xs text-slate-400">
-                Acceso exclusivo a Bóveda del Dueño, Neobanco y Modo Demo Aislado
+                Bóveda del Dueño, Cuenta Demo y Entorno Virtual (Máx. 10 Testers)
               </p>
             </div>
           </div>
@@ -166,7 +213,6 @@ export const AuthModal: React.FC = () => {
 
         {/* Current status */}
         <div className="py-4 space-y-4">
-          
           <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
             <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block">
               Sesión Activa Actualmente
@@ -178,12 +224,17 @@ export const AuthModal: React.FC = () => {
               {isOwner ? (
                 <span className="text-[11px] font-bold text-amber-400 bg-amber-950/80 border border-amber-600/50 px-2 py-0.5 rounded-full shrink-0 flex items-center gap-1">
                   <ShieldCheck className="w-3 h-3" />
-                  Dueño Cifrado 256-bit
+                  Dueño Verificado
                 </span>
               ) : isDemoAccount ? (
-                <span className="text-[11px] font-bold text-purple-300 bg-purple-950/90 border border-purple-500/50 px-2 py-0.5 rounded-full shrink-0 flex items-center gap-1 animate-pulse">
+                <span className="text-[11px] font-bold text-purple-300 bg-purple-950/90 border border-purple-500/50 px-2 py-0.5 rounded-full shrink-0 flex items-center gap-1">
                   <Sparkles className="w-3 h-3 text-purple-400" />
                   Demo Aislada ($5,000 USD)
+                </span>
+              ) : userEmail.endsWith('@vm.aethervault.local') ? (
+                <span className="text-[11px] font-bold text-cyan-300 bg-cyan-950/80 border border-cyan-500/40 px-2 py-0.5 rounded-full shrink-0 flex items-center gap-1">
+                  <Users className="w-3 h-3" />
+                  Tester VM ($5,000 Prueba)
                 </span>
               ) : (
                 <span className="text-[11px] text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full shrink-0">
@@ -195,15 +246,15 @@ export const AuthModal: React.FC = () => {
             <p className="text-[11px] text-slate-400 leading-relaxed pt-1">
               {isOwner ? (
                 <span className="text-emerald-400">
-                  ✓ Tienes acceso total a la <strong>Bóveda del Dueño</strong>, retiros con comisión 20% y al módulo <strong>🏛️ Neobanco & Pasarelas</strong>.
+                  ✓ Acceso completo a la <strong>Bóveda del Dueño</strong>, configuración USDT/BTC/PayPal y bitácora QA de los 10 testers en máquina virtual.
                 </span>
-              ) : isDemoAccount ? (
+              ) : isDemoAccount || userEmail.endsWith('@vm.aethervault.local') ? (
                 <span className="text-purple-300">
-                  🎮 Estás en la <strong>Cuenta Demo Aislada (gokudemo)</strong> con <strong>$5,000 USD (6,250 monedas)</strong>. Puedes probar todos los juegos sin riesgo. Las cuentas reales solo se activan con confirmación de depósito.
+                  🎮 Sesión de pruebas aislada activa con <strong>$5,000 USD (6,250 monedas)</strong>. Cada jugada y fallo se guarda automáticamente en el log QA del servidor.
                 </span>
               ) : (
                 <span className="text-amber-400/90">
-                  🔒 Cuenta Estándar: Las opciones de <strong>Banco Digital</strong> y la <strong>Bóveda del Dueño</strong> están reservadas solo para <strong>{OWNER_EMAIL}</strong>. Las cuentas reales son activadas solo con la confirmación de los depósitos.
+                  🔒 Cuenta Estándar: Las cuentas reales únicamente se activan tras confirmar un depósito en USDT o tarjeta.
                 </span>
               )}
             </p>
@@ -215,7 +266,7 @@ export const AuthModal: React.FC = () => {
               Seleccionar Cuenta / Rol de Acceso
             </span>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              {/* Owner Preset */}
+              {/* Owner Preset (Requires Password Prompt) */}
               <button
                 type="button"
                 onClick={handleQuickLoginOwnerPreset}
@@ -227,9 +278,9 @@ export const AuthModal: React.FC = () => {
               >
                 <div>
                   <div className="font-bold flex items-center gap-1">
-                    <span>👑 Dueño & Banco</span>
+                    <span>👑 Dueño (Clave)</span>
                   </div>
-                  <div className="text-[10px] text-slate-400 truncate max-w-[110px] font-mono">{OWNER_EMAIL}</div>
+                  <div className="text-[10px] text-slate-400 truncate max-w-[115px] font-mono">{OWNER_EMAIL}</div>
                 </div>
                 {isOwnerTarget && <CheckCircle2 className="w-4 h-4 text-amber-400 shrink-0" />}
               </button>
@@ -259,7 +310,7 @@ export const AuthModal: React.FC = () => {
                 type="button"
                 onClick={handleQuickLoginPlayerPreset}
                 className={`p-2.5 rounded-2xl border text-left text-xs transition-colors flex items-center justify-between ${
-                  !isOwnerTarget && !isDemoTarget
+                  !isOwnerTarget && !isDemoTarget && !isVmTesterTarget
                     ? 'bg-slate-800 border-slate-600 text-slate-100 font-bold'
                     : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
                 }`}
@@ -268,7 +319,41 @@ export const AuthModal: React.FC = () => {
                   <div className="font-bold">👤 Cuenta Real</div>
                   <div className="text-[10px] text-slate-400 truncate max-w-[110px] font-mono">jugador_real</div>
                 </div>
-                {!isOwnerTarget && !isDemoTarget && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+                {!isOwnerTarget && !isDemoTarget && !isVmTesterTarget && (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* VM 10-Tester Sandbox Quick Access */}
+          <div className="p-3 rounded-2xl bg-cyan-950/20 border border-cyan-500/30 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5" />
+                Entorno Pruebas Virtual (Máx. 10 Usuarios)
+              </span>
+              <span className="text-[10px] font-mono text-slate-400">Clave: {VM_TESTER_DEFAULT_PASS}</span>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <select
+                value={selectedVmTester}
+                onChange={e => handleSelectVmTesterPreset(e.target.value)}
+                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-cyan-200 font-mono focus:outline-none focus:border-cyan-400"
+              >
+                {VM_TESTER_SLOTS.map(slot => (
+                  <option key={slot.alias} value={slot.alias}>
+                    {slot.label} ({slot.alias}) — $5,000 USD Prueba
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={isVerifying}
+                onClick={handleQuickConnectVmTester}
+                className="px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-black text-xs transition shrink-0"
+              >
+                Probar Juegos ({selectedVmTester})
               </button>
             </div>
           </div>
@@ -288,39 +373,32 @@ export const AuthModal: React.FC = () => {
                     setInputEmail(e.target.value);
                     setAuthError(null);
                   }}
-                  placeholder="ej. trabajofino52@gmail.com o gokudemo"
+                  placeholder="ej. trabajofino52@gmail.com, tester01 o gokudemo"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-400"
                 />
               </div>
             </div>
 
-            {/* Password Required if target is Owner */}
+            {/* Password ALWAYS required & prompted cleanly if target is Owner */}
             {isOwnerTarget && (
               <div className="space-y-1.5 animate-in fade-in duration-150">
-                <div className="flex items-center justify-between">
-                  <label className="text-[10px] uppercase tracking-wider text-amber-400 font-bold flex items-center gap-1">
-                    <KeyRound className="w-3 h-3" />
-                    <span>Clave Maestra 256-bit Requerida</span>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={handleAutoFillKey}
-                    className="text-[10px] text-cyan-400 hover:text-cyan-300 underline font-mono"
-                  >
-                    Usar clave autorizada
-                  </button>
-                </div>
+                <label className="text-[10px] uppercase tracking-wider text-amber-400 font-bold flex items-center gap-1">
+                  <KeyRound className="w-3 h-3" />
+                  <span>Contraseña de Propietario Requerida (Verificación SQL)</span>
+                </label>
 
                 <div className="relative">
                   <Lock className="w-4 h-4 text-amber-500 absolute left-3 top-2.5" />
                   <input
+                    ref={passwordInputRef}
                     type={showPassword ? 'text' : 'password'}
                     value={inputPassword}
                     onChange={e => {
                       setInputPassword(e.target.value);
                       setAuthError(null);
                     }}
-                    placeholder="Ingresa GokuCheckersMasterKey2024Secure"
+                    autoComplete="current-password"
+                    placeholder="Ingresa tu clave privada de administrador..."
                     className="w-full bg-slate-950 border border-amber-500/50 rounded-xl pl-9 pr-9 py-2 text-xs text-amber-300 font-mono focus:outline-none focus:border-amber-400"
                   />
                   <button
@@ -332,14 +410,14 @@ export const AuthModal: React.FC = () => {
                   </button>
                 </div>
 
-                <div className="p-2.5 rounded-xl bg-amber-950/30 border border-amber-500/20 text-[10px] text-slate-400 space-y-1 font-mono">
+                <div className="p-2.5 rounded-xl bg-amber-950/30 border border-amber-500/20 text-[10px] text-slate-400 space-y-1">
                   <div className="flex items-center gap-1 text-amber-400 font-bold">
                     <ShieldCheck className="w-3 h-3" />
-                    <span>Cifrado SHA-256 de 256-Bit Activo</span>
+                    <span>Verificación Criptográfica en Servidor (scrypt + Salt 128-bit)</span>
                   </div>
-                  <div className="truncate text-slate-500 text-[9px]">
-                    Hash: 4fa9b3722fd5ff79ffea5511c819e9cafc4592b026864d82b25857e885c91cdf
-                  </div>
+                  <p className="text-[10px] text-slate-400">
+                    Por seguridad, la clave nunca se guarda ni se autocompleta en el navegador. Se valida directamente contra la base de datos SQL.
+                  </p>
                 </div>
               </div>
             )}
@@ -357,7 +435,7 @@ export const AuthModal: React.FC = () => {
                     onClick={handleAutoFillDemoKey}
                     className="text-[10px] text-cyan-400 hover:text-cyan-300 underline font-mono"
                   >
-                    Autocompletar (goku30309982)
+                    Autocompletar ({DEMO_PASSWORD})
                   </button>
                 </div>
 
@@ -370,7 +448,7 @@ export const AuthModal: React.FC = () => {
                       setInputPassword(e.target.value);
                       setAuthError(null);
                     }}
-                    placeholder="Ingresa goku30309982"
+                    placeholder={`Ingresa ${DEMO_PASSWORD}`}
                     className="w-full bg-slate-950 border border-purple-500/50 rounded-xl pl-9 pr-9 py-2 text-xs text-purple-300 font-mono focus:outline-none focus:border-purple-400"
                   />
                   <button
@@ -381,15 +459,35 @@ export const AuthModal: React.FC = () => {
                     {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                   </button>
                 </div>
+              </div>
+            )}
 
-                <div className="p-2.5 rounded-xl bg-purple-950/30 border border-purple-500/30 text-[10px] text-purple-300 space-y-1">
-                  <div className="flex items-center gap-1 font-bold">
-                    <Sparkles className="w-3 h-3 text-purple-400" />
-                    <span>Cuenta Demo Aislada ($5,000 USD / 6,250 Monedas)</span>
-                  </div>
-                  <p className="text-[10px] text-slate-400">
-                    Aislada de las cuentas reales. Puedes probar los 50 juegos y simular partidas sin riesgo.
-                  </p>
+            {/* Password Required if target is VM Tester */}
+            {isVmTesterTarget && !isOwnerTarget && !isDemoTarget && (
+              <div className="space-y-1.5 animate-in fade-in duration-150">
+                <label className="text-[10px] uppercase tracking-wider text-cyan-400 font-bold flex items-center gap-1">
+                  <KeyRound className="w-3 h-3" />
+                  <span>Contraseña Tester VM ({VM_TESTER_DEFAULT_PASS})</span>
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-cyan-500 absolute left-3 top-2.5" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={inputPassword}
+                    onChange={e => {
+                      setInputPassword(e.target.value);
+                      setAuthError(null);
+                    }}
+                    placeholder={VM_TESTER_DEFAULT_PASS}
+                    className="w-full bg-slate-950 border border-cyan-500/50 rounded-xl pl-9 pr-9 py-2 text-xs text-cyan-200 font-mono focus:outline-none focus:border-cyan-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-200"
+                  >
+                    {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
                 </div>
               </div>
             )}
@@ -407,9 +505,15 @@ export const AuthModal: React.FC = () => {
                 disabled={isVerifying}
                 className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-extrabold text-xs rounded-xl shadow transition-transform active:scale-95 disabled:opacity-50"
               >
-                {isVerifying ? 'Verificando Hash 256-bit...' : isOwnerTarget ? 'Verificar y Desbloquear Banco' : 'Iniciar como Jugador'}
+                {isVerifying
+                  ? 'Verificando en Base de Datos...'
+                  : isOwnerTarget
+                  ? 'Verificar Clave y Desbloquear Bóveda'
+                  : isVmTesterTarget
+                  ? 'Entrar como Tester VM'
+                  : 'Iniciar como Jugador'}
               </button>
-              {isOwner && (
+              {(isOwner || isDemoAccount || userEmail.endsWith('@vm.aethervault.local')) && (
                 <button
                   type="button"
                   onClick={logoutUser}
@@ -421,9 +525,7 @@ export const AuthModal: React.FC = () => {
               )}
             </div>
           </form>
-
         </div>
-
       </div>
     </div>
   );

@@ -24,7 +24,8 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
     isRealAccountActive,
     setIsStoreOpen,
     setIsAuthModalOpen,
-    setIsSupportPanelOpen
+    setIsSupportPanelOpen,
+    redemptionFeeRate
   } = useGame();
 
   const [amountCoins, setAmountCoins] = useState<string>('100');
@@ -35,28 +36,32 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
 
   if (!isOpen) return null;
 
+  const maxAllowed30PctCoins = Math.floor(coins * 0.30);
   const parsedCoins = parseInt(amountCoins, 10) || 0;
+  const exceeds30PctCap = parsedCoins > maxAllowed30PctCoins;
   // Valuation: 1 coin = $0.80 USD
+  const feeRateDecimal = redemptionFeeRate / 100;
+  const netRatePct = Math.max(0, 100 - redemptionFeeRate);
   const grossUSD = parsedCoins * 0.8;
-  const fee20PercentUSD = grossUSD * 0.2; // 20% fee to Owner's Vault
-  const net80PercentUSD = grossUSD * 0.8; // 80% to player
+  const feePercentUSD = grossUSD * feeRateDecimal; // Dynamic fee to Owner's Vault
+  const netPercentUSD = grossUSD - feePercentUSD; // Net to player
 
   const handleRequest = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (parsedCoins <= 0 || parsedCoins > coins) return;
+    if (parsedCoins <= 0 || parsedCoins > maxAllowed30PctCoins || maxAllowed30PctCoins <= 0) return;
     if (!destAddress.trim()) return;
 
     setIsSubmitting(true);
-    setTimeout(async () => {
-      await requestPlayerRedemption(parsedCoins, destType, destAddress.trim());
-      setIsSubmitting(false);
+    const ok = await requestPlayerRedemption(parsedCoins, destType, destAddress.trim());
+    setIsSubmitting(false);
+    if (ok) {
       setIsSuccess(true);
       soundFx.playCoinChime();
       setTimeout(() => {
         setIsSuccess(false);
         onClose();
       }, 2500);
-    }, 800);
+    }
   };
 
   return (
@@ -88,7 +93,7 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
 
         {isDemoAccount ? (
           <div className="py-8 text-center space-y-4">
-            <div className="w-16 h-16 mx-auto rounded-full bg-purple-950/90 border border-purple-500/60 flex items-center justify-center text-purple-300 shadow-xl">
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-purple-950/90 border border-purple-500/60 flex items-center justify-center text-purple-300 shadow-xl">
               <Lock className="w-8 h-8" />
             </div>
             <div className="space-y-1.5">
@@ -126,7 +131,7 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
           </div>
         ) : !isRealAccountActive ? (
           <div className="py-8 text-center space-y-4">
-            <div className="w-16 h-16 mx-auto rounded-full bg-amber-950/90 border border-amber-500/60 flex items-center justify-center text-amber-300 shadow-xl">
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-950/90 border border-amber-500/60 flex items-center justify-center text-amber-300 shadow-xl">
               <AlertCircle className="w-8 h-8" />
             </div>
             <div className="space-y-1.5">
@@ -134,7 +139,7 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
                 Cuenta Real Pendiente de Confirmación de Depósito
               </h4>
               <p className="text-xs text-slate-300 max-w-md mx-auto leading-relaxed">
-                Para habilitar retiros en <strong>USDT (predeterminado)</strong>, Monero o banco, la cuenta debe activarse primero confirmando al menos un depósito en la Bóveda.
+                Para habilitar retiros en <strong>USDT (predeterminado)</strong>, PayPal o banco, la cuenta debe activarse primero confirmando al menos un depósito en la Bóveda.
               </p>
             </div>
             <div className="flex flex-col sm:flex-row gap-2 justify-center pt-2">
@@ -164,14 +169,14 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
           </div>
         ) : isSuccess ? (
           <div className="py-8 text-center space-y-3">
-            <div className="w-16 h-16 mx-auto rounded-full bg-emerald-950 border border-emerald-500 flex items-center justify-center text-emerald-400 shadow-xl animate-bounce">
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-emerald-950 border border-emerald-500 flex items-center justify-center text-emerald-400 shadow-xl animate-bounce">
               <CheckCircle2 className="w-8 h-8" />
             </div>
             <h4 className="text-base font-bold text-emerald-400 font-display">
               ¡Solicitud de Canje Enviada!
             </h4>
             <p className="text-xs text-slate-300 max-w-sm mx-auto leading-relaxed">
-              Tu solicitud de retiro por <strong>${net80PercentUSD.toFixed(2)} USD</strong> (descontando el 20% de comisión para la Bóveda) ha sido registrada.
+              Tu solicitud de retiro por <strong>${netPercentUSD.toFixed(2)} USD</strong> (descontando el {redemptionFeeRate}% de comisión para la Bóveda) ha sido registrada.
             </p>
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-amber-300 flex items-center justify-center gap-1.5">
               <Clock className="w-4 h-4 text-amber-400 shrink-0" />
@@ -181,51 +186,74 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
         ) : (
           <form onSubmit={handleRequest} className="py-4 space-y-4">
             
+            {/* 30% Max Withdrawal Policy Banner */}
+            <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-500/40 space-y-1.5 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-amber-300 flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5" />
+                  Límite de Retiro: Máximo 30% del Saldo
+                </span>
+                <span className="font-mono tabular-nums font-black text-emerald-300">
+                  Máx: {maxAllowed30PctCoins.toLocaleString()} mo
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                Solo puedes retirar hasta el <strong>30%</strong> de tus {coins.toLocaleString()} monedas actuales (${(maxAllowed30PctCoins * 0.8).toFixed(2)} USD brutos). Cada solicitud requiere <strong>autorización explícita de trabajofino52@gmail.com</strong>.
+              </p>
+            </div>
+
             {/* Coins input */}
             <div>
               <div className="flex items-center justify-between text-xs mb-1">
                 <label className="text-slate-400 uppercase text-[10px] font-semibold">
-                  Cantidad de Monedas a Canjear
+                  Cantidad de Monedas a Canjear (Tope 30%)
                 </label>
                 <span className="text-slate-400">
-                  Disponible: <strong className="text-amber-400 font-mono-numbers">{coins.toLocaleString()} monedas</strong>
+                  Saldo: <strong className="text-amber-400 font-mono tabular-nums">{coins.toLocaleString()} mo</strong>
                 </span>
               </div>
               <div className="relative">
                 <input
                   type="number"
-                  min="25"
-                  max={coins}
+                  min="1"
+                  max={maxAllowed30PctCoins}
                   value={amountCoins}
                   onChange={e => setAmountCoins(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 font-mono text-base font-bold text-slate-100 focus:outline-none focus:border-amber-400"
+                  className={`w-full bg-slate-950 border rounded-xl px-3 py-2.5 font-mono tabular-nums text-base font-bold text-slate-100 focus:outline-none ${
+                    exceeds30PctCap ? 'border-rose-500 focus:border-rose-400' : 'border-slate-800 focus:border-amber-400'
+                  }`}
                 />
                 <button
                   type="button"
-                  onClick={() => setAmountCoins(coins.toString())}
+                  onClick={() => setAmountCoins(maxAllowed30PctCoins.toString())}
                   className="absolute right-2 top-2 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 text-[10px] font-bold"
                 >
-                  MÁXIMO
+                  MÁX 30% ({maxAllowed30PctCoins.toLocaleString()})
                 </button>
               </div>
+              {exceeds30PctCap && (
+                <p className="text-[11px] text-rose-400 font-semibold mt-1">
+                  Supera el límite permitido del 30% ({maxAllowed30PctCoins.toLocaleString()} monedas máximo).
+                </p>
+              )}
             </div>
 
-            {/* Economics breakdown: 20% fee */}
+            {/* Economics breakdown: Dynamic fee */}
             <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
-              <div className="flex items-center justify-between text-slate-400 font-mono-numbers">
+              <div className="flex items-center justify-between text-slate-400 font-mono tabular-nums">
                 <span>Valor Bruto Estimado:</span>
                 <span className="text-slate-200 font-bold">${grossUSD.toFixed(2)} USD</span>
               </div>
-              <div className="flex items-center justify-between text-rose-400 font-mono-numbers">
+              <div className="flex items-center justify-between text-rose-400 font-mono tabular-nums">
                 <span className="flex items-center gap-1">
-                  <span>Comisión Automática del 20%:</span>
+                  <span>Comisión Automática del {redemptionFeeRate}%:</span>
                   <span className="text-[10px] text-slate-500 font-sans">(Va a Bóveda del Dueño)</span>
                 </span>
-                <span className="font-bold">-${fee20PercentUSD.toFixed(2)} USD</span>
+                <span className="font-bold">-${feePercentUSD.toFixed(2)} USD</span>
               </div>
-              <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-sm font-bold text-emerald-400 font-mono-numbers">
-                <span>Monto Neto que Recibirás (80%):</span>
-                <span className="text-base">${net80PercentUSD.toFixed(2)} USD</span>
+              <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-sm font-bold text-emerald-400 font-mono tabular-nums">
+                <span>Monto Neto que Recibirás ({netRatePct}%):</span>
+                <span className="text-base">${netPercentUSD.toFixed(2)} USD</span>
               </div>
             </div>
 
@@ -312,20 +340,20 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
             <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-500/30 text-[11px] text-amber-200/90 flex items-start gap-2">
               <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
               <span>
-                <strong>Regla de Seguridad:</strong> Únicamente el Administrador (<strong>trabajofino52@gmail.com</strong>) tiene la potestad de autorizar y liberar el pago. Se cobrará en automático el 20% de comisión directo a la Bóveda.
+                <strong>Regla de Seguridad:</strong> Únicamente el Administrador (<strong>trabajofino52@gmail.com</strong>) tiene la potestad de autorizar y liberar el pago. Se cobrará en automático el {redemptionFeeRate}% de comisión directo a la Bóveda.
               </span>
             </div>
 
             <button
               type="submit"
-              disabled={isSubmitting || parsedCoins <= 0 || parsedCoins > coins || !destAddress.trim()}
+              disabled={isSubmitting || parsedCoins <= 0 || exceeds30PctCap || maxAllowed30PctCoins <= 0 || !destAddress.trim()}
               className="w-full py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 text-slate-950 font-extrabold text-sm rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
             >
               {isSubmitting ? (
                 <span>Enviando Solicitud al Administrador...</span>
               ) : (
                 <>
-                  <span>Solicitar Canje (${net80PercentUSD.toFixed(2)} USD Netos)</span>
+                  <span>Solicitar Canje (${netPercentUSD.toFixed(2)} USD Netos)</span>
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}

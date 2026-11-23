@@ -46,7 +46,8 @@ export const Header: React.FC = () => {
     isDemoAccount,
     resetDemoFunds,
     setIsAuthModalOpen,
-    setIsSupportPanelOpen
+    setIsSupportPanelOpen,
+    setIsTransferModalOpen
   } = useGame();
 
   const [isNotifDropdownOpen, setIsNotifDropdownOpen] = useState(false);
@@ -219,6 +220,19 @@ export const Header: React.FC = () => {
             }`}
           >
             <MessageSquare className="w-4 h-4" />
+          </button>
+
+          {/* Multi-Player Transfers & Currency Exchange trigger */}
+          <button
+            onClick={() => {
+              setIsTransferModalOpen(true);
+              soundFx.playClick();
+            }}
+            title="Transferir Monedas P2P, Conversor USD/USDT y Retiro a PayPal/USDT"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-emerald-300 bg-emerald-950/30 border border-emerald-600/50 rounded-lg hover:bg-emerald-900/40 hover:border-emerald-500 transition-colors whitespace-nowrap font-medium"
+          >
+            <ArrowLeftRight className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="hidden sm:inline">Transferir / Cambio</span>
           </button>
 
           {/* Support, Password & Payment Resolution Panel trigger */}
