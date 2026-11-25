@@ -273,6 +273,13 @@ export function getDb(): DatabaseSync {
     db.exec('ALTER TABLE player_redemption_requests ADD COLUMN external_payout_id TEXT;');
   }
 
+  // Safe schema evolution for users.has_custom_password
+  const userCols = db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>;
+  const userColNames = new Set(userCols.map(c => c.name));
+  if (!userColNames.has('has_custom_password')) {
+    db.exec('ALTER TABLE users ADD COLUMN has_custom_password INTEGER NOT NULL DEFAULT 0;');
+  }
+
   dbInstance = db;
   seedInitialSecurityRecords(db);
   return db;
@@ -740,8 +747,138 @@ export interface DbUserRow {
   is_active: number;
   is_demo_isolated: number;
   coins_balance: number;
+  has_custom_password?: number;
   failed_attempts: number;
   locked_until: number;
+}
+
+export interface PublicUserProfile {
+  email: string;
+  displayName: string;
+  role: 'OWNER' | 'DEMO' | 'PLAYER';
+  isActive: boolean;
+  isDemoIsolated: boolean;
+  coinsBalance: number;
+}
+
+const EMAIL_FORMAT_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+export function getUserSessionProfileByEmail(emailInput: string): PublicUserProfile | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      'SELECT email, display_name, role, is_active, is_demo_isolated, coins_balance FROM users WHERE LOWER(email) = LOWER(?)'
+    )
+    .get(emailInput.trim()) as
+    | {
+        email: string;
+        display_name: string;
+        role: 'OWNER' | 'DEMO' | 'PLAYER';
+        is_active: number;
+        is_demo_isolated: number;
+        coins_balance: number;
+      }
+    | undefined;
+  if (!row) return null;
+  return {
+    email: row.email,
+    displayName: row.display_name,
+    role: row.role,
+    isActive: row.is_active === 1,
+    isDemoIsolated: row.is_demo_isolated === 1,
+    coinsBalance: row.coins_balance
+  };
+}
+
+export function registerEmailUserInDb(params: {
+  email: string;
+  password: string;
+  displayName?: string;
+  ipAddress: string;
+}): {
+  ok: boolean;
+  status: number;
+  message: string;
+  user?: PublicUserProfile;
+} {
+  const db = getDb();
+  const cleanEmail = params.email.trim().toLowerCase();
+  const cleanPassword = params.password;
+  const rawName = typeof params.displayName === 'string' ? params.displayName.trim() : '';
+
+  if (!cleanEmail || cleanEmail.length > 160 || !EMAIL_FORMAT_REGEX.test(cleanEmail)) {
+    return { ok: false, status: 400, message: 'Ingresa un correo electrónico válido.' };
+  }
+
+  if (
+    cleanEmail === OWNER_EMAIL.toLowerCase() ||
+    cleanEmail === DEMO_USERNAME ||
+    cleanEmail === 'gokudemo@aethervault.com' ||
+    cleanEmail === 'jugador_anonimo@aethervault.com' ||
+    cleanEmail === 'jugador_real@aethervault.com' ||
+    cleanEmail.endsWith('@vm.aethervault.local') ||
+    /^tester\d+@/.test(cleanEmail)
+  ) {
+    return {
+      ok: false,
+      status: 403,
+      message: 'Este correo está reservado por el sistema. Usa tu correo electrónico personal.'
+    };
+  }
+
+  if (!cleanPassword || cleanPassword.length < 6 || cleanPassword.length > 128) {
+    return {
+      ok: false,
+      status: 400,
+      message: 'La contraseña debe tener entre 6 y 128 caracteres.'
+    };
+  }
+
+  const existing = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(cleanEmail) as
+    | { id: string }
+    | undefined;
+  if (existing) {
+    return {
+      ok: false,
+      status: 409,
+      message: 'Este correo ya está registrado. Inicia sesión con tu contraseña.'
+    };
+  }
+
+  const cleanDisplayName = (rawName || cleanEmail.split('@')[0]).replace(/[<>]/g, '').slice(0, 60) || 'Jugador';
+  const newId = 'usr_' + crypto.randomUUID().slice(0, 12);
+  const now = Date.now();
+
+  db.prepare(`
+    INSERT INTO users (
+      id, email, display_name, role, password_hash,
+      is_active, is_demo_isolated, coins_balance, has_custom_password,
+      created_at, updated_at
+    )
+    VALUES (?, ?, ?, 'PLAYER', ?, 0, 0, 0, 1, ?, ?)
+  `).run(newId, cleanEmail, cleanDisplayName, hashPassword(cleanPassword), now, now);
+
+  appendAuditLog(
+    cleanEmail,
+    params.ipAddress,
+    'PLAYER_REGISTERED',
+    'INFO',
+    `Nuevo usuario registrado por correo (${cleanDisplayName}). Cuenta lista para comprar monedas.`
+  );
+
+  return {
+    ok: true,
+    status: 201,
+    message: 'Cuenta creada exitosamente. Ya puedes comprar tus monedas en la Tienda.',
+    user: {
+      email: cleanEmail,
+      displayName: cleanDisplayName,
+      role: 'PLAYER',
+      isActive: false,
+      isDemoIsolated: false,
+      coinsBalance: 0
+    }
+  };
 }
 
 export function authenticateUserInDb(
@@ -752,14 +889,7 @@ export function authenticateUserInDb(
   ok: boolean;
   status: number;
   message: string;
-  user?: {
-    email: string;
-    displayName: string;
-    role: 'OWNER' | 'DEMO' | 'PLAYER';
-    isActive: boolean;
-    isDemoIsolated: boolean;
-    coinsBalance: number;
-  };
+  user?: PublicUserProfile;
 } {
   const db = getDb();
   const rawInput = emailInput.trim().toLowerCase();
@@ -785,30 +915,37 @@ export function authenticateUserInDb(
         message: `Límite de entorno VM: máximo ${MAX_VM_TESTERS} usuarios de prueba simultáneos (tester01 a tester10).`
       };
     }
-    // Auto-provision standard player account (pending deposit activation!)
     if (cleanEmail === OWNER_EMAIL.toLowerCase() || cleanEmail === DEMO_USERNAME) {
       return { ok: false, status: 401, message: 'Credenciales inválidas.' };
     }
-    const newId = 'usr_' + crypto.randomUUID().slice(0, 10);
-    const pwdToStore = passwordInput.trim() || crypto.randomBytes(12).toString('hex');
-    db.prepare(`
-      INSERT INTO users (id, email, display_name, role, password_hash, is_active, is_demo_isolated, coins_balance, created_at, updated_at)
-      VALUES (?, ?, ?, 'PLAYER', ?, 0, 0, 0, ?, ?)
-    `).run(newId, cleanEmail, cleanEmail.split('@')[0], hashPassword(pwdToStore), now, now);
+    if (cleanEmail === 'jugador_real@aethervault.com' || cleanEmail === 'jugador_anonimo@aethervault.com') {
+      const newId = 'usr_' + crypto.randomUUID().slice(0, 10);
+      const pwdToStore = passwordInput.trim() || crypto.randomBytes(12).toString('hex');
+      db.prepare(`
+        INSERT INTO users (id, email, display_name, role, password_hash, is_active, is_demo_isolated, coins_balance, has_custom_password, created_at, updated_at)
+        VALUES (?, ?, ?, 'PLAYER', ?, 0, 0, 0, 0, ?, ?)
+      `).run(newId, cleanEmail, cleanEmail.split('@')[0], hashPassword(pwdToStore), now, now);
 
-    appendAuditLog(cleanEmail, ipAddress, 'PLAYER_REGISTERED_PENDING_DEPOSIT', 'INFO', 'Cuenta estándar creada (inactiva hasta confirmación de depósito).');
+      appendAuditLog(cleanEmail, ipAddress, 'PLAYER_REGISTERED_PENDING_DEPOSIT', 'INFO', 'Cuenta estándar creada (inactiva hasta confirmación de depósito).');
+      return {
+        ok: true,
+        status: 200,
+        message: 'Sesión estándar iniciada.',
+        user: {
+          email: cleanEmail,
+          displayName: cleanEmail.split('@')[0],
+          role: 'PLAYER',
+          isActive: false,
+          isDemoIsolated: false,
+          coinsBalance: 0
+        }
+      };
+    }
+
     return {
-      ok: true,
-      status: 200,
-      message: 'Sesión estándar iniciada.',
-      user: {
-        email: cleanEmail,
-        displayName: cleanEmail.split('@')[0],
-        role: 'PLAYER',
-        isActive: false,
-        isDemoIsolated: false,
-        coinsBalance: 0
-      }
+      ok: false,
+      status: 404,
+      message: 'Correo no registrado. Regístrate primero en la pestaña "Registrar Correo".'
     };
   }
 
@@ -823,9 +960,10 @@ export function authenticateUserInDb(
     };
   }
 
-  // For standard non-VM-tester players without a password supplied on quick switcher, allow session email switch only for non-privileged accounts
+  // Allow passwordless switch ONLY for unpassworded legacy preset accounts
   const isVmTester = existing.email.endsWith('@vm.aethervault.local');
-  if (existing.role === 'PLAYER' && !isVmTester && !passwordInput) {
+  const isLegacyPreset = existing.email === 'jugador_real@aethervault.com' || existing.email === 'jugador_anonimo@aethervault.com';
+  if (existing.role === 'PLAYER' && !isVmTester && isLegacyPreset && existing.has_custom_password !== 1 && !passwordInput) {
     appendAuditLog(existing.email, ipAddress, 'PLAYER_SESSION_STARTED', 'INFO', 'Inicio de sesión de jugador estándar.');
     return {
       ok: true,
@@ -839,6 +977,14 @@ export function authenticateUserInDb(
         isDemoIsolated: false,
         coinsBalance: existing.coins_balance
       }
+    };
+  }
+
+  if (existing.role === 'PLAYER' && !isVmTester && !passwordInput) {
+    return {
+      ok: false,
+      status: 401,
+      message: 'Ingresa tu contraseña para iniciar sesión en esta cuenta.'
     };
   }
 
@@ -900,9 +1046,9 @@ export function changeUserPasswordInDb(
   if (!existing) {
     const newId = 'usr_' + crypto.randomUUID().slice(0, 10);
     db.prepare(`
-      INSERT INTO users (id, email, display_name, role, password_hash, is_active, is_demo_isolated, coins_balance, created_at, updated_at)
-      VALUES (?, ?, ?, 'PLAYER', ?, 0, 0, 0, ?, ?)
-    `).run(newId, emailInput.trim(), emailInput.trim().split('@')[0], hashPassword(newPassword), now, now);
+      INSERT INTO users (id, email, display_name, role, password_hash, is_active, is_demo_isolated, coins_balance, has_custom_password, created_at, updated_at)
+      VALUES (?, ?, ?, 'PLAYER', ?, 0, 0, 0, 1, ?, ?)
+    `).run(newId, emailInput.trim().toLowerCase(), emailInput.trim().split('@')[0], hashPassword(newPassword), now, now);
     appendAuditLog(emailInput, ipAddress, 'PASSWORD_SET_PLAYER', 'INFO', 'Contraseña establecida en base de datos segura.');
     return { ok: true, message: 'Contraseña guardada con cifrado scrypt.' };
   }
@@ -914,7 +1060,7 @@ export function changeUserPasswordInDb(
     }
   }
 
-  db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?').run(
+  db.prepare('UPDATE users SET password_hash = ?, has_custom_password = 1, updated_at = ? WHERE id = ?').run(
     hashPassword(newPassword),
     now,
     existing.id

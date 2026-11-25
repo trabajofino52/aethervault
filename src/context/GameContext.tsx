@@ -90,6 +90,12 @@ interface GameContextType {
   isDemoAccount: boolean;
   isRealAccountActive: boolean;
   loginUser: (email: string) => void;
+  loginUserWithCredentials: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+  registerUserWithEmail: (params: {
+    email: string;
+    password: string;
+    displayName?: string;
+  }) => Promise<{ ok: boolean; error?: string; user?: { email: string; displayName: string; coinsBalance: number } }>;
   loginOwnerWithKey: (password: string) => Promise<boolean>;
   loginDemoUser: (password: string) => Promise<boolean>;
   loginVmTester: (testerId: string, password: string) => Promise<{ ok: boolean; error?: string }>;
@@ -98,6 +104,9 @@ interface GameContextType {
   logoutUser: () => void;
   isAuthModalOpen: boolean;
   setIsAuthModalOpen: (open: boolean) => void;
+  authModalMode: 'LOGIN' | 'REGISTER';
+  setAuthModalMode: (mode: 'LOGIN' | 'REGISTER') => void;
+  openAuthModal: (mode?: 'LOGIN' | 'REGISTER') => void;
 
   // Modals for Redemption, Level 100, Daily Wheel, Leaderboard, and Referrals
   isRedemptionModalOpen: boolean;
@@ -453,26 +462,69 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
 
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
 
-  const [authToken, setAuthToken] = useState<string | null>(() => {
-    try {
-      return sessionStorage.getItem('av_api_token');
-    } catch {
-      return null;
-    }
-  });
+  const openAuthModal = useCallback((mode: 'LOGIN' | 'REGISTER' = 'LOGIN') => {
+    setAuthModalMode(mode);
+    setIsAuthModalOpen(true);
+  }, []);
+
+  // Auth bearer token stays strictly in React memory; browser persistence uses HttpOnly av_session cookie
+  const [authToken, setAuthToken] = useState<string | null>(null);
 
   const persistAuthToken = useCallback((token: string | null) => {
     setAuthToken(token);
-    try {
-      if (token) {
-        sessionStorage.setItem('av_api_token', token);
-      } else {
-        sessionStorage.removeItem('av_api_token');
-      }
-    } catch {
-      // ignore
-    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/auth/session', { credentials: 'same-origin' })
+      .then(async res => {
+        if (!res.ok || !active) return;
+        const data = (await res.json().catch(() => ({}))) as {
+          authenticated?: boolean;
+          token?: string;
+          user?: {
+            email: string;
+            displayName: string;
+            role: 'OWNER' | 'DEMO' | 'PLAYER';
+            isActive: boolean;
+            isDemoIsolated: boolean;
+            coinsBalance: number;
+          };
+        };
+        if (!active || !data.authenticated || !data.user) return;
+        if (data.token) setAuthToken(data.token);
+        setUserEmail(data.user.email);
+        const ownerAuth = data.user.role === 'OWNER' && data.user.email.toLowerCase() === OWNER_EMAIL.toLowerCase();
+        setIsOwnerAuthenticated(ownerAuth);
+        if (typeof data.user.coinsBalance === 'number') {
+          setCoins(data.user.coinsBalance);
+          try {
+            localStorage.setItem(STORAGE_KEY_COINS, String(data.user.coinsBalance));
+          } catch {
+            // ignore
+          }
+        }
+        if (data.user.displayName) {
+          setCharacter(prev => ({ ...prev, name: data.user!.displayName }));
+        }
+        if (data.user.isActive && !data.user.isDemoIsolated) {
+          setHasConfirmedRealDeposit(true);
+        }
+        try {
+          localStorage.setItem(STORAGE_KEY_USER_EMAIL, data.user.email);
+          localStorage.setItem('aethervault_owner_auth_v1', ownerAuth ? 'true' : 'false');
+        } catch {
+          // ignore
+        }
+      })
+      .catch(() => {
+        // ignore session check network errors
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   const isOwner = userEmail.trim().toLowerCase() === OWNER_EMAIL.toLowerCase() && isOwnerAuthenticated;
@@ -735,14 +787,124 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
   };
 
+  const registerUserWithEmail = async (params: {
+    email: string;
+    password: string;
+    displayName?: string;
+  }): Promise<{ ok: boolean; error?: string; user?: { email: string; displayName: string; coinsBalance: number } }> => {
+    const cleanEmail = params.email.trim().toLowerCase();
+    const cleanPassword = params.password;
+    const cleanName = params.displayName?.trim() || '';
+
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: cleanEmail,
+          password: cleanPassword,
+          displayName: cleanName
+        })
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        token?: string;
+        error?: string;
+        user?: { email: string; displayName: string; coinsBalance: number; isActive?: boolean };
+      };
+      if (!res.ok || !data.user) {
+        return { ok: false, error: data.error || 'No se pudo completar el registro con correo.' };
+      }
+      if (data.token) persistAuthToken(data.token);
+      setUserEmail(data.user.email);
+      setIsOwnerAuthenticated(false);
+      setCoins(data.user.coinsBalance ?? 0);
+      setHasConfirmedRealDeposit(Boolean(data.user.isActive));
+      if (data.user.displayName) {
+        setCharacter(prev => ({ ...prev, name: data.user!.displayName }));
+      }
+      try {
+        localStorage.setItem(STORAGE_KEY_USER_EMAIL, data.user.email);
+        localStorage.setItem('aethervault_owner_auth_v1', 'false');
+        localStorage.setItem(STORAGE_KEY_COINS, String(data.user.coinsBalance ?? 0));
+        localStorage.setItem('aethervault_real_deposit_v1', data.user.isActive ? 'true' : 'false');
+      } catch {
+        // ignore
+      }
+      soundFx.playWinFanfare();
+      addNotification(
+        'Cuenta Registrada por Correo',
+        `¡Bienvenido ${data.user.displayName}! Tu cuenta ${data.user.email} está lista para comprar monedas en la Tienda.`,
+        'success'
+      );
+      return { ok: true, user: data.user };
+    } catch {
+      return { ok: false, error: 'Error de red contactando al servidor de registro.' };
+    }
+  };
+
+  const loginUserWithCredentials = async (
+    email: string,
+    password: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      return { ok: false, error: 'Ingresa tu correo electrónico.' };
+    }
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail, password })
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        token?: string;
+        error?: string;
+        user?: { email: string; displayName: string; coinsBalance: number; isActive: boolean; isDemoIsolated: boolean };
+      };
+      if (!res.ok || !data.user) {
+        return { ok: false, error: data.error || 'Correo o contraseña inválidos.' };
+      }
+      if (data.token) persistAuthToken(data.token);
+      setUserEmail(data.user.email);
+      setIsOwnerAuthenticated(false);
+      setCoins(typeof data.user.coinsBalance === 'number' ? data.user.coinsBalance : 0);
+      const activeReal = Boolean(data.user.isActive && !data.user.isDemoIsolated);
+      setHasConfirmedRealDeposit(activeReal);
+      if (data.user.displayName) {
+        setCharacter(prev => ({ ...prev, name: data.user!.displayName }));
+      }
+      try {
+        localStorage.setItem(STORAGE_KEY_USER_EMAIL, data.user.email);
+        localStorage.setItem('aethervault_owner_auth_v1', 'false');
+        localStorage.setItem(STORAGE_KEY_COINS, String(data.user.coinsBalance ?? 0));
+        localStorage.setItem('aethervault_real_deposit_v1', activeReal ? 'true' : 'false');
+      } catch {
+        // ignore
+      }
+      soundFx.playBiometricSuccess();
+      addNotification(
+        'Sesión Iniciada',
+        `Bienvenido de nuevo, ${data.user.displayName || data.user.email}. Saldo actual: ${(data.user.coinsBalance ?? 0).toLocaleString()} monedas.`,
+        'success'
+      );
+      setActiveTab('store');
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'No se pudo conectar con el servidor de autenticación.' };
+    }
+  };
+
   const loginUser = (email: string) => {
     const cleanEmail = email.trim();
     if (cleanEmail.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
-      setIsAuthModalOpen(true);
+      openAuthModal('LOGIN');
       return;
     }
     if (cleanEmail.toLowerCase() === DEMO_USERNAME.toLowerCase()) {
-      setIsAuthModalOpen(true);
+      openAuthModal('LOGIN');
       return;
     }
     setUserEmail(cleanEmail);
@@ -756,6 +918,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     fetch('/api/auth/login', {
       method: 'POST',
+      credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: cleanEmail, password: '' })
     })
@@ -3807,6 +3970,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isDemoAccount,
         isRealAccountActive,
         loginUser,
+        loginUserWithCredentials,
+        registerUserWithEmail,
         loginOwnerWithKey,
         loginDemoUser,
         loginVmTester,
@@ -3815,6 +3980,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         logoutUser,
         isAuthModalOpen,
         setIsAuthModalOpen,
+        authModalMode,
+        setAuthModalMode,
+        openAuthModal,
         payoutConfig,
         gatewayAvailability,
         playerVisibility,

@@ -268,6 +268,8 @@ export const Header: React.FC = () => {
                 ? `Sesión de Propietario (${userEmail})`
                 : isDemoAccount
                 ? `Cuenta Demo Aislada (${userEmail})`
+                : userEmail === 'jugador_anonimo@aethervault.com'
+                ? 'Control de Usuario: Regístrate con tu correo o inicia sesión'
                 : `Sesión de Jugador (${userEmail})`
             }
             className={`flex items-center gap-1.5 min-h-[36px] px-2.5 py-1.5 text-xs rounded-lg border transition-colors whitespace-nowrap ${
@@ -275,12 +277,14 @@ export const Header: React.FC = () => {
                 ? 'bg-amber-950/40 text-amber-300 border-amber-600/60 hover:bg-amber-900/40 font-bold'
                 : isDemoAccount
                 ? 'bg-purple-950/50 text-purple-300 border-purple-500/60 hover:bg-purple-900/40 font-bold'
+                : userEmail === 'jugador_anonimo@aethervault.com'
+                ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/50 hover:bg-emerald-900/40 font-semibold'
                 : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
             }`}
           >
-            <User className={`w-3.5 h-3.5 ${isDemoAccount ? 'text-purple-400' : 'text-amber-400'}`} />
-            <span className="hidden sm:inline font-mono text-[11px] truncate max-w-[96px]">
-              {userEmail.split('@')[0]}
+            <User className={`w-3.5 h-3.5 ${isDemoAccount ? 'text-purple-400' : userEmail === 'jugador_anonimo@aethervault.com' ? 'text-emerald-400' : 'text-amber-400'}`} />
+            <span className="hidden sm:inline font-mono text-[11px] truncate max-w-[116px]">
+              {userEmail === 'jugador_anonimo@aethervault.com' ? 'Entrar / Registro' : userEmail.split('@')[0]}
             </span>
             {isOwner && <span className="text-[10px] text-amber-400">👑</span>}
             {isDemoAccount && <span className="text-[10px] text-purple-300 font-bold">DEMO</span>}

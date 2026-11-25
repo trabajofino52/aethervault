@@ -19,7 +19,8 @@ import {
   CheckCircle2,
   AlertCircle,
   ExternalLink,
-  Activity
+  Activity,
+  UserPlus
 } from 'lucide-react';
 import { soundFx } from '../utils/audio';
 
@@ -37,6 +38,7 @@ export const StoreModal: React.FC = () => {
     gatewayAvailability,
     userEmail,
     authToken,
+    openAuthModal,
     setIsSupportPanelOpen,
     capturePayPalOrder
   } = useGame();
@@ -70,6 +72,7 @@ export const StoreModal: React.FC = () => {
   if (!isStoreOpen) return null;
 
   const isVmTester = userEmail.toLowerCase().endsWith('@vm.aethervault.local');
+  const isGuestUnregistered = !authToken || userEmail.toLowerCase() === 'jugador_anonimo@aethervault.com';
 
   const currencyRates: Record<string, { symbol: string; rate: number }> = {
     USD: { symbol: '$', rate: 1.0 },
@@ -169,6 +172,12 @@ export const StoreModal: React.FC = () => {
     if (!activeTier) return;
     setCheckoutError(null);
 
+    if (isGuestUnregistered) {
+      setCheckoutError('Registra tu correo electrónico o inicia sesión para acreditar monedas directamente a tu cuenta.');
+      soundFx.playClick();
+      return;
+    }
+
     if (selectedMethod === 'crypto_usdt' && !usdtTxHash.trim()) {
       setCheckoutError('Ingresa el TXID / Hash o pulsa "Generar Factura" / "TXID Prueba (VM)" para validar el pago.');
       soundFx.playClick();
@@ -249,9 +258,17 @@ export const StoreModal: React.FC = () => {
                   Tienda Virtual & Recargas en Vivo
                 </h3>
                 <span className="text-xs text-amber-400 font-mono-numbers">10 Niveles</span>
-                {isVmTester && (
+                {isVmTester ? (
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
                     Flujo Real Tester VM ({userEmail.split('@')[0]})
+                  </span>
+                ) : !isGuestUnregistered ? (
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/40">
+                    Cuenta: {userEmail}
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/40">
+                    Requiere Registro por Correo
                   </span>
                 )}
               </div>
@@ -641,8 +658,47 @@ export const StoreModal: React.FC = () => {
                 </div>
               )}
 
-              {/* Live Transaction Flow Generator (Step 1 before settlement so testers see the complete pipeline) */}
-              {authToken && (
+              {/* Registration / Session prompt if guest OR Live Transaction Flow Generator */}
+              {isGuestUnregistered ? (
+                <div className="mt-3 p-3.5 rounded-xl bg-emerald-950/35 border border-emerald-500/40 space-y-2.5 text-xs">
+                  <div className="flex items-start gap-2">
+                    <UserPlus className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-bold text-emerald-300">
+                        Registra tu correo para comprar monedas
+                      </div>
+                      <p className="text-[11px] text-slate-300 leading-relaxed mt-0.5">
+                        Las monedas se acreditan de forma permanente en tu cuenta personal para conservar tu saldo entre sesiones.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundFx.playClick();
+                        setIsStoreOpen(false);
+                        openAuthModal('REGISTER');
+                      }}
+                      className="min-h-[40px] px-3 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 transition"
+                    >
+                      <UserPlus className="w-3.5 h-3.5" />
+                      <span>Registrar Correo</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundFx.playClick();
+                        setIsStoreOpen(false);
+                        openAuthModal('LOGIN');
+                      }}
+                      className="min-h-[40px] px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold text-xs border border-slate-700 transition"
+                    >
+                      Ya tengo cuenta
+                    </button>
+                  </div>
+                </div>
+              ) : (
                 <div className="mt-3 p-3 rounded-xl bg-slate-900/90 border border-amber-500/30 space-y-2 text-xs">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-bold text-amber-300 flex items-center gap-1.5">
