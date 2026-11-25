@@ -17,6 +17,8 @@ import { ArenaBattle } from './components/ArenaBattle';
 import { RouletteGame } from './components/RouletteGame';
 import { BlackjackGame } from './components/BlackjackGame';
 import { PokerGame } from './components/PokerGame';
+import { GreyhoundRaceGame } from './components/GreyhoundRaceGame';
+import { HorseRaceGame } from './components/HorseRaceGame';
 import { AdminPanel } from './components/AdminPanel';
 import { AuthModal } from './components/AuthModal';
 import { LiveWinningTicker } from './components/LiveWinningTicker';
@@ -37,7 +39,6 @@ import {
   ShieldCheck,
   Fingerprint,
   Lock,
-  Sparkles,
   ArrowRight,
   Zap,
   Swords,
@@ -47,7 +48,7 @@ import {
   Gift,
   Share2,
   Landmark,
-  MessageSquare
+  ArrowLeftRight
 } from 'lucide-react';
 import { soundFx } from './utils/audio';
 
@@ -59,31 +60,37 @@ const StoreHeroHome: React.FC = () => {
     character,
     coins,
     isOwner,
+    playerVisibility,
     setIsDailyBonusModalOpen,
     setIsLeaderboardModalOpen,
     setIsReferralModalOpen,
-    setIsChatWidgetOpen
+    setIsTransferModalOpen
   } = useGame();
+
+  const showHeroTab = isOwner || playerVisibility.showCharacterHero;
+  const showNeobank = isOwner || playerVisibility.showNeobankCard;
+  const showCatalog = isOwner || playerVisibility.showStoreCatalog;
+  const showTop50 = isOwner || playerVisibility.showTop50Casino;
 
   return (
     <div className="space-y-12 pb-16">
       
       {/* Hero Showcase Split */}
       <section className="relative overflow-hidden rounded-3xl bg-slate-900 border border-slate-800 shadow-2xl">
-        <div className="grid grid-cols-1 lg:grid-cols-12 items-stretch min-h-[480px]">
+        <div className="grid grid-cols-1 lg:grid-cols-12 items-stretch min-h-[460px]">
           
           {/* Left Text Zone */}
           <div className="lg:col-span-7 p-8 sm:p-12 flex flex-col justify-between z-10 space-y-6">
             <div className="space-y-3">
               <div className="flex items-center gap-2 text-xs text-amber-400 font-semibold tracking-wider uppercase">
                 <Coins className="w-4 h-4" />
-                <span>Gestión de Activos Digitales & Casino Provably-Fair</span>
+                <span>Casino Provably-Fair · Mesas & Carreras en Vivo</span>
               </div>
               <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-slate-100 font-display leading-[1.15] text-balance">
-                Adquiere Monedas Aether y Domina el Casino con Cifrado E2EE
+                Adquiere Monedas Aether y Juega en Nuestras 5 Salas Oficiales
               </h1>
               <p className="text-sm sm:text-base text-slate-300 leading-relaxed max-w-xl">
-                Plataforma de alta seguridad con tienda de 10 niveles de monedas, mejoras progresivas para tu héroe, pasarela de pagos internacional con confirmación biométrica y juegos de Ruleta, Blackjack y Póker inmutables.
+                Ruleta Europea, Blackjack 21, Póker Video, Carrera de Perros (10 Galgos) y Carrera de Caballos (10 Purasangres) con pagos transparentes, transferencias P2P y cambio USDT/PayPal.
               </p>
             </div>
 
@@ -95,23 +102,25 @@ const StoreHeroHome: React.FC = () => {
                   setIsStoreOpen(true);
                   soundFx.playClick();
                 }}
-                className="px-6 py-3.5 bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-extrabold text-sm rounded-xl shadow-xl shadow-amber-500/20 flex items-center gap-2 transition-transform active:scale-95"
+                className="min-h-[44px] px-6 py-3 bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-extrabold text-sm rounded-xl shadow-xl shadow-amber-500/20 flex items-center gap-2 transition-transform active:scale-95"
               >
                 <Zap className="w-4 h-4 fill-slate-950" />
-                <span>Explorar Tienda de 10 Niveles</span>
+                <span>Recargar Monedas</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
 
-              <button
-                onClick={() => {
-                  setActiveTab('character');
-                  soundFx.playClick();
-                }}
-                className="px-6 py-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-700 text-slate-200 font-bold text-sm rounded-xl transition-colors flex items-center gap-2"
-              >
-                <Swords className="w-4 h-4 text-rose-400" />
-                <span>Mejorar Héroe ({character.name})</span>
-              </button>
+              {showHeroTab && (
+                <button
+                  onClick={() => {
+                    setActiveTab('character');
+                    soundFx.playClick();
+                  }}
+                  className="min-h-[44px] px-6 py-3 bg-slate-800/90 hover:bg-slate-750 border border-slate-700 text-slate-200 font-bold text-sm rounded-xl transition-colors flex items-center gap-2"
+                >
+                  <Swords className="w-4 h-4 text-rose-400" />
+                  <span>Mejorar Héroe ({character.name})</span>
+                </button>
+              )}
             </div>
 
             {/* Trust Badges */}
@@ -179,7 +188,7 @@ const StoreHeroHome: React.FC = () => {
       {/* Interactive Hub for All Integrated Suggestions */}
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         
-        {/* Card 1: Rueda Diaria & Misiones */}
+        {/* Card 1: 🎰 Rueda 24h */}
         <div
           onClick={() => {
             setIsDailyBonusModalOpen(true);
@@ -188,19 +197,19 @@ const StoreHeroHome: React.FC = () => {
           className="p-5 rounded-2xl bg-gradient-to-br from-amber-950/40 via-slate-900 to-slate-950 border border-amber-500/40 hover:border-amber-400 cursor-pointer shadow-lg hover:shadow-amber-500/10 transition-all group space-y-3"
         >
           <div className="flex items-center justify-between">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 group-hover:scale-110 transition-transform">
-              <Gift className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 text-lg group-hover:scale-110 transition-transform">
+              🎰
             </div>
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
-              Giro Gratis 24h
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">
+              Rueda 24h
             </span>
           </div>
           <div>
             <h3 className="text-sm font-bold text-slate-100 group-hover:text-amber-300 transition-colors">
-              Rueda Diaria & Misiones
+              🎰 Rueda 24h & Misiones
             </h3>
             <p className="text-xs text-slate-400 mt-1">
-              Gira la rueda gratis para ganar hasta 500 monedas y cumple misiones diarias.
+              Gira la rueda gratis cada 24h para ganar hasta 500 monedas y cumple misiones diarias.
             </p>
           </div>
           <div className="text-[11px] text-amber-400 font-bold flex items-center gap-1 pt-1">
@@ -209,7 +218,7 @@ const StoreHeroHome: React.FC = () => {
           </div>
         </div>
 
-        {/* Card 2: Ranking Global & Torneo Semanal */}
+        {/* Card 2: Torneo 30% */}
         <div
           onClick={() => {
             setIsLeaderboardModalOpen(true);
@@ -221,13 +230,13 @@ const StoreHeroHome: React.FC = () => {
             <div className="w-10 h-10 rounded-xl bg-blue-500/20 border border-blue-500/40 flex items-center justify-center text-blue-400 group-hover:scale-110 transition-transform">
               <Trophy className="w-5 h-5" />
             </div>
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 font-mono">
-              Pozo 30% Wagers
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300 border border-blue-500/30 font-mono">
+              Torneo 30%
             </span>
           </div>
           <div>
             <h3 className="text-sm font-bold text-slate-100 group-hover:text-blue-300 transition-colors">
-              Ranking Top 100 & Torneo
+              Ranking Top 100 & Torneo 30%
             </h3>
             <p className="text-xs text-slate-400 mt-1">
               Compite en niveles del 1 al 100 con pozo acumulado en tiempo real.
@@ -239,7 +248,7 @@ const StoreHeroHome: React.FC = () => {
           </div>
         </div>
 
-        {/* Card 3: Programa de Afiliados */}
+        {/* Card 3: Afiliados 5% */}
         <div
           onClick={() => {
             setIsReferralModalOpen(true);
@@ -251,13 +260,13 @@ const StoreHeroHome: React.FC = () => {
             <div className="w-10 h-10 rounded-xl bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400 group-hover:scale-110 transition-transform">
               <Share2 className="w-5 h-5" />
             </div>
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-              5% Vitalicio
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-mono">
+              Afiliados 5%
             </span>
           </div>
           <div>
             <h3 className="text-sm font-bold text-slate-100 group-hover:text-cyan-300 transition-colors">
-              Afiliados & Códigos VIP
+              Afiliados 5% & Cupones
             </h3>
             <p className="text-xs text-slate-400 mt-1">
               Invita amigos con tu enlace personal y canjea cupones de bono instantáneos.
@@ -269,193 +278,223 @@ const StoreHeroHome: React.FC = () => {
           </div>
         </div>
 
-        {/* Card 4: Top 10 Pasarelas & Neobanco BaaS */}
-        <div
-          onClick={() => {
-            setActiveTab('payment_platforms');
-            soundFx.playClick();
-          }}
-          className="p-5 rounded-2xl bg-gradient-to-br from-indigo-950/40 via-slate-900 to-slate-950 border border-indigo-500/40 hover:border-indigo-400 cursor-pointer shadow-lg hover:shadow-indigo-500/10 transition-all group space-y-3"
-        >
-          <div className="flex items-center justify-between">
-            <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 group-hover:scale-110 transition-transform">
-              <Landmark className="w-5 h-5" />
+        {/* Card 4: Hub Neobanco (Admin/Gated) OR Transferir / Cambio (Always Visible) */}
+        {showNeobank ? (
+          <div
+            onClick={() => {
+              setActiveTab('payment_platforms');
+              soundFx.playClick();
+            }}
+            className="p-5 rounded-2xl bg-gradient-to-br from-indigo-950/40 via-slate-900 to-slate-950 border border-indigo-500/40 hover:border-indigo-400 cursor-pointer shadow-lg hover:shadow-indigo-500/10 transition-all group space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 group-hover:scale-110 transition-transform">
+                <Landmark className="w-5 h-5" />
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-emerald-500/20 text-emerald-300 border-emerald-500/30 font-mono">
+                10+ Pasarelas BaaS
+              </span>
             </div>
-            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-              isOwner 
-                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30 font-mono' 
-                : 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30 font-mono'
-            }`}>
-              {isOwner ? '10+ Pasarelas BaaS' : 'Fase Privada · Dueño'}
-            </span>
+            <div>
+              <h3 className="text-sm font-bold text-slate-100 group-hover:text-indigo-300 transition-colors">
+                Hub Neobanco & Pasarelas
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Plataformas BaaS (Swan, Unit, dLocal, NOWPayments) para gestionar tu infraestructura financiera.
+              </p>
+            </div>
+            <div className="text-[11px] text-indigo-400 font-bold flex items-center gap-1 pt-1">
+              <span>Abrir Módulo de Neobanco</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </div>
           </div>
-          <div>
-            <h3 className="text-sm font-bold text-slate-100 group-hover:text-indigo-300 transition-colors">
-              Hub Neobanco & Pasarelas
-            </h3>
-            <p className="text-xs text-slate-400 mt-1">
-              {isOwner 
-                ? 'Top 10+ plataformas BaaS (Swan, Unit, dLocal, NOWPayments) para crear tu banco digital.'
-                : 'Módulo exclusivo para trabajofino52@gmail.com con clave SHA-256. Próximamente para usuarios.'}
-            </p>
+        ) : (
+          <div
+            onClick={() => {
+              setIsTransferModalOpen(true);
+              soundFx.playClick();
+            }}
+            className="p-5 rounded-2xl bg-gradient-to-br from-emerald-950/40 via-slate-900 to-slate-950 border border-emerald-500/40 hover:border-emerald-400 cursor-pointer shadow-lg hover:shadow-emerald-500/10 transition-all group space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 group-hover:scale-110 transition-transform">
+                <ArrowLeftRight className="w-5 h-5" />
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
+                PayPal / USDT
+              </span>
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-100 group-hover:text-emerald-300 transition-colors">
+                Transferir / Cambio
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Envía monedas a otros jugadores, convierte saldo y solicita retiros a PayPal o USDT.
+              </p>
+            </div>
+            <div className="text-[11px] text-emerald-400 font-bold flex items-center gap-1 pt-1">
+              <span>Abrir Transferencias & Cambio</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </div>
           </div>
-          <div className="text-[11px] text-indigo-400 font-bold flex items-center gap-1 pt-1">
-            <span>{isOwner ? 'Abrir Módulo de Neobanco' : 'Ver Estado & Roadmap'}</span>
-            <ChevronRight className="w-3.5 h-3.5" />
-          </div>
-        </div>
+        )}
 
       </section>
 
-      {/* 10 Tiers Showcase Grid */}
-      <section className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
+      {/* 10 Tiers Showcase Grid (Shown only when Admin enables it or Owner) */}
+      {showCatalog && (
+        <section className="space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
               <span className="text-xs uppercase tracking-widest text-amber-400 font-semibold">
                 Paquetes de 10 hasta 10,000 Monedas (Nivel 7: 1,000 Monedas por $800 USD)
               </span>
+              <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-100 font-display">
+                Catálogo de Monedas de 10 Niveles
+              </h2>
+              <p className="text-xs text-slate-400">
+                Recarga desde 10 hasta 10,000 monedas con liquidación instantánea y bonificaciones VIP
+              </p>
             </div>
-            <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-100 font-display">
-              Catálogo de Monedas de 10 Niveles
-            </h2>
-            <p className="text-xs text-slate-400">
-              Recarga desde 10 hasta 10,000 monedas con liquidación instantánea y bonificaciones VIP
-            </p>
+
+            <div className="text-xs text-slate-400 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800 self-start font-mono tabular-nums">
+              Saldo actual: <span className="font-bold text-amber-400">{coins.toLocaleString()} monedas</span>
+            </div>
           </div>
 
-          <div className="text-xs text-slate-400 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800 self-start">
-            Saldo actual: <span className="font-bold text-amber-400 font-mono-numbers">{coins.toLocaleString()} monedas</span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-          {COIN_TIERS.map(tier => (
-            <div
-              key={tier.level}
-              className={`p-4 rounded-2xl bg-slate-900 border transition-all flex flex-col justify-between ${
-                tier.popular
-                  ? 'border-amber-400/80 shadow-xl shadow-amber-500/10 ring-1 ring-amber-400/40'
-                  : 'border-slate-800 hover:border-slate-700'
-              }`}
-            >
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] font-bold font-mono-numbers px-2 py-0.5 rounded bg-slate-950 text-amber-400 border border-slate-800">
-                    {tier.badge}
-                  </span>
-                  {tier.bonusPercent > 0 && (
-                    <span className="text-[11px] font-semibold text-emerald-400 font-mono-numbers">
-                      +{tier.bonusPercent}%
-                    </span>
-                  )}
-                </div>
-
-                <h3 className="font-bold text-slate-100 text-sm font-display truncate">
-                  {tier.name}
-                </h3>
-
-                <div className="my-3 flex items-baseline gap-1">
-                  <Coins className="w-4 h-4 text-amber-400 shrink-0 self-center" />
-                  <span className="text-2xl font-black text-amber-300 font-mono-numbers">
-                    {tier.coins.toLocaleString()}
-                  </span>
-                  <span className="text-xs text-slate-400">monedas</span>
-                </div>
-
-                <div className="text-base font-bold text-slate-100 font-mono-numbers">
-                  ${tier.priceUSD} USD
-                </div>
-                <div className="text-[11px] text-slate-400 font-mono-numbers mt-0.5">
-                  ${(tier.priceUSD / tier.coins).toFixed(2)} por moneda
-                </div>
-
-                <ul className="mt-3 space-y-1 text-[11px] text-slate-400 border-t border-slate-800/80 pt-2">
-                  {tier.features.slice(0, 2).map((f, i) => (
-                    <li key={i} className="flex items-center gap-1.5 truncate">
-                      <span className="text-emerald-400 font-bold">✓</span>
-                      <span>{f}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <button
-                onClick={() => {
-                  setSelectedStoreTier(tier);
-                  setIsStoreOpen(true);
-                  soundFx.playClick();
-                }}
-                className={`mt-4 w-full py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            {COIN_TIERS.map(tier => (
+              <div
+                key={tier.level}
+                className={`p-4 rounded-2xl bg-slate-900 border transition-all flex flex-col justify-between ${
                   tier.popular
-                    ? 'bg-amber-400 hover:bg-amber-300 text-slate-950 shadow-md shadow-amber-500/20'
-                    : 'bg-slate-800 hover:bg-slate-750 text-slate-200'
+                    ? 'border-amber-400/80 shadow-xl shadow-amber-500/10 ring-1 ring-amber-400/40'
+                    : 'border-slate-800 hover:border-slate-700'
                 }`}
               >
-                <span>Comprar</span>
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ))}
-        </div>
-      </section>
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] font-bold font-mono tabular-nums px-2 py-0.5 rounded bg-slate-950 text-amber-400 border border-slate-800">
+                      {tier.badge}
+                    </span>
+                    {tier.bonusPercent > 0 && (
+                      <span className="text-[11px] font-semibold text-emerald-400 font-mono tabular-nums">
+                        +{tier.bonusPercent}%
+                      </span>
+                    )}
+                  </div>
 
-      {/* Casino Games Suite Preview Strip */}
-      <section className="space-y-6">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs uppercase tracking-widest text-emerald-400 font-semibold">
-              Suite de Casino Cifrada
-            </span>
-          </div>
-          <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-100 font-display">
-            Juegos de Casino con Extremo a Extremo
-          </h2>
-          <p className="text-xs text-slate-400">
-            Juega con tus monedas de forma justa, verificando cada tirada mediante la cadena criptográfica SHA-256
-          </p>
-        </div>
+                  <h3 className="font-bold text-slate-100 text-sm font-display truncate">
+                    {tier.name}
+                  </h3>
 
-        {/* Banner: Top 50 Casino Hub */}
-        <div
-          onClick={() => {
-            setActiveTab('top_50_casino');
-            soundFx.playClick();
-          }}
-          className="p-5 sm:p-6 rounded-3xl bg-gradient-to-r from-indigo-950/80 via-purple-950/50 to-slate-900 border border-indigo-500/50 hover:border-amber-400 cursor-pointer shadow-2xl transition-all group relative overflow-hidden"
-        >
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 via-purple-600 to-indigo-600 flex items-center justify-center text-3xl shadow-xl group-hover:scale-105 transition-transform shrink-0">
-                🎰
-              </div>
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono">
-                    Catálogo Completo · 50 Títulos
-                  </span>
-                  <span className="text-[10px] text-emerald-400 font-mono">
-                    RTP hasta 99.5%
-                  </span>
+                  <div className="my-3 flex items-baseline gap-1">
+                    <Coins className="w-4 h-4 text-amber-400 shrink-0 self-center" />
+                    <span className="text-2xl font-black text-amber-300 font-mono tabular-nums">
+                      {tier.coins.toLocaleString()}
+                    </span>
+                    <span className="text-xs text-slate-400">monedas</span>
+                  </div>
+
+                  <div className="text-base font-bold text-slate-100 font-mono tabular-nums">
+                    ${tier.priceUSD} USD
+                  </div>
+                  <div className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
+                    ${(tier.priceUSD / tier.coins).toFixed(2)} por moneda
+                  </div>
+
+                  <ul className="mt-3 space-y-1 text-[11px] text-slate-400 border-t border-slate-800/80 pt-2">
+                    {tier.features.slice(0, 2).map((f, i) => (
+                      <li key={i} className="flex items-center gap-1.5 truncate">
+                        <span className="text-emerald-400 font-bold">✓</span>
+                        <span>{f}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-                <h3 className="text-lg sm:text-xl font-black text-slate-100 group-hover:text-amber-300 transition-colors font-display">
-                  Los 50 Mejores Juegos de Casino Online del Mundo
-                </h3>
-                <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-                  Gates of Olympus, Sweet Bonanza, Aviator, Starburst, Book of Dead, Lightning Roulette, Baccarat y más. Con simuladores interactivos, búsqueda y filtro de proveedores.
-                </p>
-              </div>
-            </div>
 
-            <div className="flex items-center gap-2 self-start sm:self-auto shrink-0 px-4 py-2.5 rounded-xl bg-amber-500 group-hover:bg-amber-400 text-slate-950 font-black text-xs uppercase tracking-wider shadow-lg transition-transform active:scale-95">
-              <span>Explorar los 50 Juegos</span>
-              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-            </div>
+                <button
+                  onClick={() => {
+                    setSelectedStoreTier(tier);
+                    setIsStoreOpen(true);
+                    soundFx.playClick();
+                  }}
+                  className={`mt-4 w-full min-h-[40px] py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                    tier.popular
+                      ? 'bg-amber-400 hover:bg-amber-300 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'bg-slate-800 hover:bg-slate-750 text-slate-200'
+                  }`}
+                >
+                  <span>Comprar</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Casino Games Suite Preview Strip: 5 Visible Games Only */}
+      <section className="space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-2">
+          <div>
+            <span className="text-xs uppercase tracking-widest text-emerald-400 font-semibold">
+              Salas Oficiales de Casino & Carreras
+            </span>
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-100 font-display">
+              5 Juegos Disponibles en Vivo
+            </h2>
+            <p className="text-xs text-slate-400">
+              Ruleta Europea, Blackjack 21, Póker Video, Carrera de Perros (10 Galgos) y Carrera de Caballos (10 Purasangres).
+            </p>
+          </div>
+          <div className="text-xs text-slate-400 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800 font-mono tabular-nums self-start">
+            Saldo: <span className="font-bold text-amber-400">{coins.toLocaleString()} mo</span>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          
+        {/* Banner: Top 50 Casino Hub (Hidden from players unless Owner or explicitly enabled by Admin) */}
+        {showTop50 && (
+          <div
+            onClick={() => {
+              setActiveTab('top_50_casino');
+              soundFx.playClick();
+            }}
+            className="p-5 sm:p-6 rounded-3xl bg-gradient-to-r from-indigo-950/80 via-purple-950/50 to-slate-900 border border-indigo-500/50 hover:border-amber-400 cursor-pointer shadow-2xl transition-all group relative overflow-hidden"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 via-purple-600 to-indigo-600 flex items-center justify-center text-3xl shadow-xl group-hover:scale-105 transition-transform shrink-0">
+                  🎰
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono">
+                      {isOwner ? 'Catálogo Completo · Incluye 10 Juegos Exclusivos Admin' : 'Juegos Adicionales Habilitados por Admin'}
+                    </span>
+                    <span className="text-[10px] text-emerald-400 font-mono">
+                      RTP hasta 99.5%
+                    </span>
+                  </div>
+                  <h3 className="text-lg sm:text-xl font-black text-slate-100 group-hover:text-amber-300 transition-colors font-display">
+                    {isOwner ? 'Panel Top 50 + 10 Juegos Exclusivos del Administrador' : 'Catálogo Extendido de Casino'}
+                  </h3>
+                  <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
+                    Slots, Crash, Minas, Dados y Mesas en vivo con verificación SHA-256.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 self-start sm:self-auto shrink-0 px-4 py-2.5 rounded-xl bg-amber-500 group-hover:bg-amber-400 text-slate-950 font-black text-xs uppercase tracking-wider shadow-lg transition-transform active:scale-95">
+                <span>Abrir Catálogo</span>
+                <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 5 Core Visible Casino Games Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {/* Card 1: Roulette */}
           <div
             onClick={() => {
@@ -464,7 +503,7 @@ const StoreHeroHome: React.FC = () => {
             }}
             className="group cursor-pointer rounded-2xl bg-slate-900 border border-slate-800 hover:border-amber-500/60 overflow-hidden shadow-xl transition-all hover:-translate-y-1"
           >
-            <div className="h-44 overflow-hidden relative">
+            <div className="h-44 overflow-hidden relative bg-slate-950">
               <img
                 src="/src/assets/images/roulette_wheel_bg_1793650647052.jpg"
                 alt="Ruleta Europea"
@@ -472,7 +511,7 @@ const StoreHeroHome: React.FC = () => {
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-transparent to-transparent" />
-              <div className="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-slate-950/80 backdrop-blur-md border border-slate-800 text-[10px] text-amber-400 font-bold uppercase">
+              <div className="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-slate-950/85 border border-slate-800 text-[10px] text-amber-400 font-bold uppercase font-mono">
                 Pago hasta 35:1
               </div>
             </div>
@@ -504,7 +543,7 @@ const StoreHeroHome: React.FC = () => {
                   BLACKJACK 21
                 </span>
               </div>
-              <div className="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-slate-950/80 backdrop-blur-md border border-slate-800 text-[10px] text-emerald-400 font-bold uppercase">
+              <div className="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-slate-950/85 border border-slate-800 text-[10px] text-emerald-400 font-bold uppercase font-mono">
                 Pago 3:2 Natural
               </div>
             </div>
@@ -530,7 +569,7 @@ const StoreHeroHome: React.FC = () => {
             }}
             className="group cursor-pointer rounded-2xl bg-slate-900 border border-slate-800 hover:border-cyan-500/60 overflow-hidden shadow-xl transition-all hover:-translate-y-1"
           >
-            <div className="h-44 overflow-hidden relative">
+            <div className="h-44 overflow-hidden relative bg-slate-950">
               <img
                 src="/src/assets/images/poker_cards_chips_1793650647589.jpg"
                 alt="Póker Video"
@@ -538,13 +577,13 @@ const StoreHeroHome: React.FC = () => {
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-transparent to-transparent" />
-              <div className="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-slate-950/80 backdrop-blur-md border border-slate-800 text-[10px] text-cyan-400 font-bold uppercase">
+              <div className="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-slate-950/85 border border-slate-800 text-[10px] text-cyan-400 font-bold uppercase font-mono">
                 Multiplicador 800x
               </div>
             </div>
             <div className="p-5 space-y-2">
               <h3 className="text-lg font-bold text-slate-100 font-display group-hover:text-cyan-400 transition-colors">
-                Póker 5-Card Draw
+                Póker Video 5-Card Draw
               </h3>
               <p className="text-xs text-slate-400 leading-relaxed">
                 Elige qué cartas retener y cambia para armar Escaleras Reales, Full House o Tríos con bonificación de Suerte.
@@ -556,6 +595,73 @@ const StoreHeroHome: React.FC = () => {
             </div>
           </div>
 
+          {/* Card 4: Carrera de Perros (10 Galgos) */}
+          <div
+            onClick={() => {
+              setActiveTab('greyhound_racing');
+              soundFx.playClick();
+            }}
+            className="group cursor-pointer rounded-2xl bg-slate-900 border border-slate-800 hover:border-amber-500/60 overflow-hidden shadow-xl transition-all hover:-translate-y-1"
+          >
+            <div className="h-44 overflow-hidden relative bg-amber-950/40">
+              <img
+                src="/src/assets/images/greyhound_racing_banner_1795576242836.jpg"
+                alt="Carrera de Perros"
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-transparent to-transparent" />
+              <div className="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-slate-950/85 border border-slate-800 text-[10px] text-amber-400 font-bold uppercase font-mono">
+                10 Galgos · Hasta 18.0x
+              </div>
+            </div>
+            <div className="p-5 space-y-2">
+              <h3 className="text-lg font-bold text-slate-100 font-display group-hover:text-amber-400 transition-colors">
+                Carrera de Perros (10 Galgos)
+              </h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Apuesta al Ganador (1°) o Podio (Top 3) entre 10 galgos numerados con pista nocturna animada en vivo.
+              </p>
+              <div className="pt-2 flex items-center justify-between text-xs text-amber-400 font-semibold">
+                <span>Apostar en Galgos</span>
+                <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              </div>
+            </div>
+          </div>
+
+          {/* Card 5: Carrera de Caballos (10 Purasangres) */}
+          <div
+            onClick={() => {
+              setActiveTab('horse_racing');
+              soundFx.playClick();
+            }}
+            className="group cursor-pointer rounded-2xl bg-slate-900 border border-slate-800 hover:border-emerald-500/60 overflow-hidden shadow-xl transition-all hover:-translate-y-1"
+          >
+            <div className="h-44 overflow-hidden relative bg-emerald-950/40">
+              <img
+                src="/src/assets/images/horse_racing_banner_1795576242629.jpg"
+                alt="Carrera de Caballos"
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-transparent to-transparent" />
+              <div className="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-slate-950/85 border border-slate-800 text-[10px] text-emerald-400 font-bold uppercase font-mono">
+                10 Caballos · Hasta 20.0x
+              </div>
+            </div>
+            <div className="p-5 space-y-2">
+              <h3 className="text-lg font-bold text-slate-100 font-display group-hover:text-emerald-400 transition-colors">
+                Carrera de Caballos (10 Purasangres)
+              </h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Hipódromo clásico de 10 purasangres sobre césped. Combina boletos a Ganador o Podio con foto-finish oficial.
+              </p>
+              <div className="pt-2 flex items-center justify-between text-xs text-emerald-400 font-semibold">
+                <span>Apostar en Hipódromo</span>
+                <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -563,66 +669,103 @@ const StoreHeroHome: React.FC = () => {
   );
 };
 
+const RestrictedPlayerModuleFallback: React.FC<{ title: string }> = ({ title }) => {
+  const { setActiveTab } = useGame();
+  return (
+    <div className="max-w-xl mx-auto my-14 p-8 rounded-3xl bg-slate-900 border border-slate-800 text-center space-y-5 shadow-2xl">
+      <div className="w-14 h-14 mx-auto rounded-2xl bg-slate-950 border border-slate-700 flex items-center justify-center text-amber-400 text-2xl">
+        🔒
+      </div>
+      <div className="space-y-2">
+        <h2 className="text-xl font-bold text-slate-100 font-display">{title}</h2>
+        <p className="text-xs text-slate-400 leading-relaxed">
+          Esta sección adicional se encuentra oculta por configuración del Administrador. Puedes jugar libremente en nuestras 5 salas activas:
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {[
+          { id: 'roulette' as const, label: 'Ruleta Europea' },
+          { id: 'blackjack' as const, label: 'Blackjack 21' },
+          { id: 'poker' as const, label: 'Póker Video' },
+          { id: 'greyhound_racing' as const, label: 'Carrera de Perros' },
+          { id: 'horse_racing' as const, label: 'Carrera de Caballos' }
+        ].map(btn => (
+          <button
+            key={btn.id}
+            onClick={() => {
+              setActiveTab(btn.id);
+              soundFx.playClick();
+            }}
+            className="min-h-[40px] px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-200 text-xs font-bold transition-colors"
+          >
+            {btn.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const MainContent: React.FC = () => {
-  const { activeTab, isOwner, userEmail, setIsAuthModalOpen } = useGame();
+  const { activeTab, isOwner, playerVisibility, userEmail, setIsAuthModalOpen } = useGame();
 
   switch (activeTab) {
     case 'store':
       return <StoreHeroHome />;
     case 'top_50_casino':
-      return <Top50CasinoHub />;
+      return isOwner || playerVisibility.showTop50Casino ? (
+        <Top50CasinoHub />
+      ) : (
+        <RestrictedPlayerModuleFallback title="Catálogo Adicional Reservado para el Administrador" />
+      );
     case 'character':
-      return <CharacterProgression />;
+      return isOwner || playerVisibility.showCharacterHero ? (
+        <CharacterProgression />
+      ) : (
+        <RestrictedPlayerModuleFallback title="Héroe & Habilidades Oculto por el Administrador" />
+      );
     case 'arena':
-      return <ArenaBattle />;
+      return isOwner || playerVisibility.showArenaBattle ? (
+        <ArenaBattle />
+      ) : (
+        <RestrictedPlayerModuleFallback title="Arena de Batalla Oculta por el Administrador" />
+      );
     case 'roulette':
       return <RouletteGame />;
     case 'blackjack':
       return <BlackjackGame />;
     case 'poker':
       return <PokerGame />;
+    case 'greyhound_racing':
+      return <GreyhoundRaceGame />;
+    case 'horse_racing':
+      return <HorseRaceGame />;
     case 'payment_platforms':
       if (isOwner) {
         return <PaymentPlatformsGuide />;
       }
       return (
         <div className="max-w-xl mx-auto my-14 p-8 sm:p-10 rounded-3xl bg-slate-900 border border-slate-800 text-center space-y-6 shadow-2xl relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
           <div className="w-16 h-16 mx-auto rounded-2xl bg-indigo-950/80 border border-indigo-500/40 flex items-center justify-center text-indigo-400 text-3xl shadow-lg">
             🏛️
           </div>
           <div className="space-y-2">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-bold uppercase tracking-wider font-mono">
-              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-bold uppercase tracking-wider font-mono">
               Fase Privada · Exclusivo Propietario
             </span>
             <h2 className="text-2xl font-black text-slate-100 font-display">
               Arquitectura de Banco Digital & Neobanco
             </h2>
             <p className="text-xs text-slate-300 leading-relaxed max-w-md mx-auto">
-              La suite de pasarelas de pago y Banking-as-a-Service (BaaS) está reservada de forma estricta para el propietario registrado (<strong className="text-amber-400 font-mono">trabajofino52@gmail.com</strong>) protegido por clave maestra de 256 bits (<span className="font-mono text-cyan-400 text-[11px]">SHA-256</span>).
+              La suite de pasarelas de pago y Banking-as-a-Service (BaaS) está reservada para el propietario (<strong className="text-amber-400 font-mono">trabajofino52@gmail.com</strong>).
             </p>
           </div>
-
-          <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-left text-xs space-y-2.5">
-            <div className="text-cyan-400 font-bold flex items-center gap-1.5">
-              <span>⏳ Roadmap para Jugadores Estándar:</span>
-            </div>
-            <p className="text-[12px] text-slate-400 leading-relaxed">
-              Actualmente los usuarios normales no tienen acceso al panel bancario ni a la emisión de cuentas. En fases futuras del roadmap del proyecto, cada jugador podrá solicitar su propia tarjeta prepaga vinculada a su saldo de monedas Aether.
-            </p>
-            <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between text-[11px] text-slate-500 font-mono border-t border-slate-800/80 gap-1">
-              <span>Sesión actual: <span className="text-slate-300">{userEmail}</span></span>
-              <span className="text-emerald-400/90 font-semibold">Cifrado SHA-256 Activo</span>
-            </div>
-          </div>
-
           <button
             onClick={() => {
               setIsAuthModalOpen(true);
               soundFx.playClick();
             }}
-            className="w-full py-3.5 bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition-transform active:scale-95"
+            className="w-full min-h-[44px] py-3 bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition-transform active:scale-95"
           >
             Autenticar como Propietario (trabajofino52@gmail.com)
           </button>
@@ -634,21 +777,21 @@ const MainContent: React.FC = () => {
       }
       return (
         <div className="max-w-md mx-auto my-16 p-8 rounded-3xl bg-slate-900 border border-slate-800 text-center space-y-4 shadow-2xl">
-          <div className="w-16 h-16 mx-auto rounded-full bg-rose-950/60 border border-rose-500/40 flex items-center justify-center text-rose-400 text-2xl shadow-lg">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-rose-950/60 border border-rose-500/40 flex items-center justify-center text-rose-400 text-2xl shadow-lg">
             🔒
           </div>
           <h2 className="text-xl font-bold text-slate-100 font-display">
             Acceso Exclusivo: Bóveda del Dueño
           </h2>
           <p className="text-xs text-slate-300 leading-relaxed">
-            Esta sección administrativa de recaudación y retiros únicamente es visible para el propietario registrado con el correo <strong className="text-amber-400 font-mono">trabajofino52@gmail.com</strong>.
+            Esta sección administrativa únicamente es visible para <strong className="text-amber-400 font-mono">trabajofino52@gmail.com</strong>.
           </p>
           <div className="text-[11px] text-slate-500 font-mono">
             Sesión actual: {userEmail}
           </div>
           <button
             onClick={() => setIsAuthModalOpen(true)}
-            className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg transition-transform active:scale-95"
+            className="w-full min-h-[44px] py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg transition-transform active:scale-95"
           >
             Iniciar Sesión con trabajofino52@gmail.com
           </button>

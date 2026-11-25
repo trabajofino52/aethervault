@@ -33,8 +33,12 @@ export const Top50CasinoHub: React.FC = () => {
     addNotification,
     setActiveTab,
     isHappyHourActiveForGame,
-    setIsProvablyFairModalOpen
+    setIsProvablyFairModalOpen,
+    isOwner
   } = useGame();
+
+  // Los 10 juegos adicionales son exclusivos del Administrador (trabajofino52@gmail.com)
+  const visibleGamesPool = isOwner ? TOP_50_CASINO_GAMES : TOP_50_CASINO_GAMES.slice(10);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
@@ -112,7 +116,7 @@ export const Top50CasinoHub: React.FC = () => {
   };
 
   // Extract distinct providers
-  const providers = ['Todos', ...Array.from(new Set(TOP_50_CASINO_GAMES.map(g => g.provider)))];
+  const providers = ['Todos', ...Array.from(new Set(visibleGamesPool.map(g => g.provider)))];
 
   // Categories list
   const categories: string[] = [
@@ -127,7 +131,7 @@ export const Top50CasinoHub: React.FC = () => {
   ];
 
   // Filtering & Sorting
-  const filteredGames = TOP_50_CASINO_GAMES.filter(game => {
+  const filteredGames = visibleGamesPool.filter(game => {
     const matchesSearch =
       game.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       game.provider.toLowerCase().includes(searchQuery.toLowerCase()) ||

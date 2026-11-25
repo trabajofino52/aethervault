@@ -6,6 +6,8 @@ import { createServer as createViteServer } from 'vite';
 import {
   getDb,
   OWNER_EMAIL,
+  registerEmailUserInDb,
+  getUserSessionProfileByEmail,
   authenticateUserInDb,
   changeUserPasswordInDb,
   listSupportTicketsFromDb,
@@ -45,6 +47,8 @@ import {
   applySafeVaultRecommendationsInDb,
   getEconomyConfigFromDb,
   saveEconomyConfigInDb,
+  getPlayerVisibilityConfigFromDb,
+  savePlayerVisibilityConfigInDb,
   updateRedemptionPayoutResultInDb,
   settlePayPalCapturedOrderInDb,
   listDirectoryPlayersFromDb,
@@ -56,7 +60,7 @@ import {
   type StoredVaultGatewayApis
 } from './server/db.ts';
 import crypto from 'node:crypto';
-import { signSessionToken } from './server/cryptoVault.ts';
+import { signSessionToken, verifySessionToken } from './server/cryptoVault.ts';
 import {
   securityHeadersMiddleware,
   sanitizeBodyMiddleware,
@@ -65,6 +69,7 @@ import {
   createRateLimiter,
   getRateLimiterStats,
   extractClientIp,
+  extractAuthToken,
   requireAuth,
   requireOwner,
   type AuthenticatedRequest
@@ -167,6 +172,66 @@ async function bootstrapServer() {
       status: 'ok',
       service: 'AetherVault Security Engine',
       timestamp: Date.now()
+    });
+  });
+
+  // Session hydration from HttpOnly cookie or Bearer token
+  app.get('/api/auth/session', (req, res) => {
+    const token = extractAuthToken(req);
+    if (!token) {
+      res.json({ authenticated: false });
+      return;
+    }
+    const payload = verifySessionToken(token);
+    if (!payload) {
+      res.json({ authenticated: false });
+      return;
+    }
+    const profile = getUserSessionProfileByEmail(payload.sub);
+    if (!profile) {
+      res.json({ authenticated: false });
+      return;
+    }
+    res.json({
+      authenticated: true,
+      token,
+      user: profile
+    });
+  });
+
+  // Email Registration endpoint (New Player Account)
+  app.post('/api/auth/register', authLimiter, (req, res) => {
+    const ip = extractClientIp(req);
+    const body = req.body as { email?: string; password?: string; displayName?: string };
+    const email = typeof body?.email === 'string' ? body.email.trim() : '';
+    const password = typeof body?.password === 'string' ? body.password : '';
+    const displayName = typeof body?.displayName === 'string' ? body.displayName.trim() : '';
+
+    const regResult = registerEmailUserInDb({
+      email,
+      password,
+      displayName,
+      ipAddress: ip
+    });
+
+    if (!regResult.ok || !regResult.user) {
+      res.status(regResult.status).json({ error: regResult.message });
+      return;
+    }
+
+    const token = signSessionToken(regResult.user.email, regResult.user.role);
+    res.cookie('av_session', token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: req.secure || req.headers['x-forwarded-proto'] === 'https',
+      maxAge: 12 * 60 * 60 * 1000
+    });
+
+    res.status(201).json({
+      ok: true,
+      token,
+      user: regResult.user,
+      message: regResult.message
     });
   });
 
@@ -368,7 +433,8 @@ async function bootstrapServer() {
       vmTestModeEnabled: cfg.vmTestModeEnabled,
       maxVmTesters: cfg.maxVmTesters,
       gatewayAvailability: getPublicGatewayAvailability(),
-      economyConfig: getEconomyConfigFromDb()
+      economyConfig: getEconomyConfigFromDb(),
+      playerVisibility: getPlayerVisibilityConfigFromDb()
     });
   });
 
@@ -388,6 +454,37 @@ async function bootstrapServer() {
       vaultRetentionPct: Number(body.vaultRetentionPct ?? 70),
       redemptionFeePct: Number(body.redemptionFeePct ?? 20),
       transferFeePct: body.transferFeePct !== undefined ? Number(body.transferFeePct) : undefined,
+      adminEmail: OWNER_EMAIL,
+      ipAddress: ip
+    });
+    res.json({ ok: true, config: updated });
+  });
+
+  // Authoritative Player Visibility Matrix (Admin controls which additional options players can see)
+  app.get('/api/config/player-visibility', (_req, res) => {
+    res.json({ config: getPlayerVisibilityConfigFromDb() });
+  });
+
+  app.put('/api/admin/player-visibility', requireOwner, (req: AuthenticatedRequest, res) => {
+    const ip = req.clientIp || extractClientIp(req);
+    const body = (req.body || {}) as {
+      showTop50Casino?: boolean;
+      showCharacterHero?: boolean;
+      showArenaBattle?: boolean;
+      showStoreCatalog?: boolean;
+      showSecurityTools?: boolean;
+      showNeobankCard?: boolean;
+    };
+    const patch: Record<string, boolean> = {};
+    if (typeof body.showTop50Casino === 'boolean') patch.showTop50Casino = body.showTop50Casino;
+    if (typeof body.showCharacterHero === 'boolean') patch.showCharacterHero = body.showCharacterHero;
+    if (typeof body.showArenaBattle === 'boolean') patch.showArenaBattle = body.showArenaBattle;
+    if (typeof body.showStoreCatalog === 'boolean') patch.showStoreCatalog = body.showStoreCatalog;
+    if (typeof body.showSecurityTools === 'boolean') patch.showSecurityTools = body.showSecurityTools;
+    if (typeof body.showNeobankCard === 'boolean') patch.showNeobankCard = body.showNeobankCard;
+
+    const updated = savePlayerVisibilityConfigInDb({
+      patch,
       adminEmail: OWNER_EMAIL,
       ipAddress: ip
     });

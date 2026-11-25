@@ -1,4 +1,26 @@
-export type NavigationTab = 'store' | 'top_50_casino' | 'character' | 'arena' | 'roulette' | 'blackjack' | 'poker' | 'admin' | 'payment_platforms';
+export type NavigationTab =
+  | 'store'
+  | 'top_50_casino'
+  | 'character'
+  | 'arena'
+  | 'roulette'
+  | 'blackjack'
+  | 'poker'
+  | 'greyhound_racing'
+  | 'horse_racing'
+  | 'admin'
+  | 'payment_platforms';
+
+export interface PlayerVisibilityConfig {
+  showTop50Casino: boolean;
+  showCharacterHero: boolean;
+  showArenaBattle: boolean;
+  showStoreCatalog: boolean;
+  showSecurityTools: boolean;
+  showNeobankCard: boolean;
+  updatedAt: number;
+  updatedBy: string;
+}
 
 export type GamePlayMode = 'SOLO_AI' | 'MULTIPLAYER_LIVE';
 
@@ -154,7 +176,7 @@ export interface PushNotification {
 
 export interface ProvablyFairRound {
   id: string;
-  game: 'Roulette' | 'Blackjack' | 'Poker' | 'Arena' | 'Top50Casino';
+  game: 'Roulette' | 'Blackjack' | 'Poker' | 'Greyhounds' | 'Horses' | 'Arena' | 'Top50Casino';
   timestamp: number;
   serverSeedHash: string;
   clientSeed: string;
@@ -173,7 +195,7 @@ export interface DailyQuest {
   rewardCoins: number;
   completed: boolean;
   claimed: boolean;
-  gameType: 'Roulette' | 'Blackjack' | 'Poker' | 'Arena' | 'Upgrade' | 'Top50Casino';
+  gameType: 'Roulette' | 'Blackjack' | 'Poker' | 'Greyhounds' | 'Horses' | 'Arena' | 'Upgrade' | 'Top50Casino';
 }
 
 export interface LeaderboardEntry {
@@ -217,7 +239,7 @@ export interface CoinGiftRecord {
   txHash: string;
 }
 
-export type HappyHourGameSection = 'ALL_GAMES' | 'TOP_50_CASINO' | 'ROULETTE' | 'BLACKJACK' | 'POKER' | 'ARENA';
+export type HappyHourGameSection = 'ALL_GAMES' | 'TOP_50_CASINO' | 'ROULETTE' | 'BLACKJACK' | 'POKER' | 'GREYHOUNDS' | 'HORSES' | 'ARENA';
 export type HappyHourTargetGroup = 'ALL_PLAYERS' | 'VIP_PLAYERS' | 'NEW_PLAYERS' | 'ONLINE_ONLY';
 
 export interface HappyHourCampaign {

@@ -28,6 +28,10 @@ export const CasinoTableBar: React.FC<CasinoTableBarProps> = ({ gameTitle, userB
     ? 'Blackjack'
     : gameTitle.toLowerCase().includes('póker') || gameTitle.toLowerCase().includes('poker')
     ? 'Poker'
+    : gameTitle.toLowerCase().includes('perro') || gameTitle.toLowerCase().includes('galgo')
+    ? 'Greyhounds'
+    : gameTitle.toLowerCase().includes('caballo') || gameTitle.toLowerCase().includes('purasangre')
+    ? 'Horses'
     : 'Arena';
 
   const hh = isHappyHourActiveForGame(gameKey);
