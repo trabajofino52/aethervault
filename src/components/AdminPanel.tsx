@@ -46,7 +46,8 @@ import {
   KeyRound,
   ShieldAlert,
   FileText,
-  Mail
+  Mail,
+  Eye
 } from 'lucide-react';
 import { soundFx } from '../utils/audio';
 import {
@@ -116,11 +117,14 @@ export const AdminPanel: React.FC = () => {
     supportTickets,
     replyToTicket,
     resolveSupportTicket,
-    updateSupportTicketStatus
+    updateSupportTicketStatus,
+    playerVisibility,
+    updatePlayerVisibility
   } = useGame();
 
   const [activeTab, setActiveTab] = useState<
     | 'overview'
+    | 'visibility_control'
     | 'currency_control'
     | 'happy_hour'
     | 'redemptions'
@@ -945,6 +949,7 @@ export const AdminPanel: React.FC = () => {
       <div className="flex items-center gap-1.5 p-1.5 bg-slate-900 rounded-2xl border border-slate-800 text-xs font-semibold overflow-x-auto shadow-inner">
         {(
           [
+            { id: 'visibility_control' as const, label: 'Visibilidad Jugadores', icon: Eye },
             { id: 'currency_control' as const, label: 'Monedas & Regalos / Airdrops', icon: Gift },
             { id: 'happy_hour' as const, label: 'Horas Locas & Multiplicadores', icon: Flame, isLive: happyHourCampaign.isActive },
             { id: 'redemptions' as const, label: 'Autorización de Canjes', badge: pendingRedemptionsCount },
@@ -1621,10 +1626,12 @@ export const AdminPanel: React.FC = () => {
                   </label>
                   <div className="space-y-2">
                     {[
-                      { id: 'ALL_GAMES' as const, label: 'Todos los Juegos de Casino & Arena', icon: '🎰' },
+                      { id: 'ALL_GAMES' as const, label: 'Todos los Juegos de Casino & Carreras', icon: '🎰' },
                       { id: 'ROULETTE' as const, label: 'Ruleta Europea Real', icon: '🎡' },
                       { id: 'BLACKJACK' as const, label: 'Blackjack 21 Las Vegas', icon: '🃏' },
                       { id: 'POKER' as const, label: 'Póker 5-Card Draw', icon: '♠️' },
+                      { id: 'GREYHOUNDS' as const, label: 'Carrera de Perros (10 Galgos)', icon: '🐕' },
+                      { id: 'HORSES' as const, label: 'Carrera de Caballos (10 Purasangres)', icon: '🐎' },
                       { id: 'ARENA' as const, label: 'Arena de Batalla Cibernética', icon: '⚔️' }
                     ].map(sec => (
                       <label
@@ -4243,6 +4250,129 @@ export const AdminPanel: React.FC = () => {
 
       {/* TAB: FULL AUDIT TRAIL (FINANCIAL + API CONFIG + AUTHORIZATION) */}
       {activeTab === 'audit_trail' && <AuditTrail />}
+
+      {/* TAB: VISIBILIDAD DE JUEGOS Y OPCIONES PARA JUGADORES */}
+      {activeTab === 'visibility_control' && (
+        <div className="space-y-6 animate-in fade-in duration-300">
+          <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-5">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+              <div>
+                <h2 className="text-xl font-bold text-slate-100 font-display flex items-center gap-2">
+                  <Eye className="w-5 h-5 text-amber-400" />
+                  Control de Visibilidad para Jugadores (Ngrok & Multidispositivo)
+                </h2>
+                <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
+                  Por defecto los jugadores solo ven los 5 juegos autorizados (Ruleta Europea, Blackjack 21, Póker Video, Carrera de Perros y Carrera de Caballos) y las 7 opciones permanentes. Activa o oculta opciones adicionales cuando tú lo decidas.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  void updatePlayerVisibility({
+                    showTop50Casino: false,
+                    showCharacterHero: false,
+                    showArenaBattle: false,
+                    showStoreCatalog: false,
+                    showSecurityTools: false,
+                    showNeobankCard: false
+                  })
+                }
+                className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 text-xs font-bold whitespace-nowrap"
+              >
+                Ocultar Todo lo Opcional (Modo Estricto)
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-4 rounded-2xl bg-slate-950 border border-emerald-500/30 space-y-2">
+                <div className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                  Siempre Visibles para Todos los Jugadores
+                </div>
+                <div className="text-xs text-slate-300 leading-relaxed">
+                  <strong>5 Juegos:</strong> Ruleta Europea · Blackjack 21 · Póker Video · Carrera de Perros (10 Galgos) · Carrera de Caballos (10 Purasangres).
+                </div>
+                <div className="text-xs text-amber-300 leading-relaxed font-mono">
+                  <strong>Barra Fija:</strong> 🎰 Rueda 24h · Torneo 30% · Afiliados 5% · Chat · Transferir / Cambio · Soporte · 2x Activo
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-slate-950 border border-amber-500/30 space-y-2">
+                <div className="text-xs font-bold text-amber-400 uppercase tracking-wider">
+                  Exclusivo del Administrador ({OWNER_EMAIL})
+                </div>
+                <div className="text-xs text-slate-300 leading-relaxed">
+                  Los <strong>10 juegos adicionales destacados</strong>, la Bóveda del Dueño, Pasarelas API, AuditTrail y el Hub Neobanco permanecen ocultos y exclusivos para tu sesión de administrador.
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {(
+                [
+                  {
+                    key: 'showTop50Casino' as const,
+                    title: 'Catálogo Extendido (Juegos Extra sin los 10 Admin)',
+                    desc: 'Muestra la pestaña y el acceso a juegos extra en la barra para jugadores (los 10 juegos adicionales siempre quedan solo para Admin).'
+                  },
+                  {
+                    key: 'showCharacterHero' as const,
+                    title: 'Héroe & Habilidades',
+                    desc: 'Habilita la pestaña Héroe & Habilidades y el botón Mejorar Héroe en Inicio.'
+                  },
+                  {
+                    key: 'showArenaBattle' as const,
+                    title: 'Arena de Batalla',
+                    desc: 'Habilita la pestaña Arena de Batalla en el menú de jugadores.'
+                  },
+                  {
+                    key: 'showStoreCatalog' as const,
+                    title: 'Catálogo Completo de 10 Niveles en Inicio',
+                    desc: 'Muestra las 10 tarjetas de paquetes directamente en Inicio (el botón Tienda en la barra superior siempre sigue disponible).'
+                  },
+                  {
+                    key: 'showSecurityTools' as const,
+                    title: 'Botones Extra Header (E2EE, Biometría, Historial)',
+                    desc: 'Muestra los accesos directos E2EE, Biometría e Historial en el encabezado.'
+                  },
+                  {
+                    key: 'showNeobankCard' as const,
+                    title: 'Tarjeta Hub Neobanco en Inicio',
+                    desc: 'Muestra la tarjeta informativa de Hub Neobanco en Inicio en lugar de Transferir / Cambio.'
+                  }
+                ] as const
+              ).map(item => {
+                const enabled = playerVisibility[item.key];
+                return (
+                  <div
+                    key={item.key}
+                    className={`p-4 rounded-2xl border flex items-center justify-between gap-4 transition-colors ${
+                      enabled
+                        ? 'bg-emerald-950/25 border-emerald-500/40'
+                        : 'bg-slate-950 border-slate-800'
+                    }`}
+                  >
+                    <div className="space-y-1 min-w-0">
+                      <div className="text-sm font-bold text-slate-100">{item.title}</div>
+                      <p className="text-xs text-slate-400 leading-relaxed">{item.desc}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void updatePlayerVisibility({ [item.key]: !enabled })}
+                      className={`min-h-[40px] px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider shrink-0 transition-colors ${
+                        enabled
+                          ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+                          : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                      }`}
+                    >
+                      {enabled ? 'Visible' : 'Oculto'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* TAB: EXECUTIVE SUMMARY, CONVERSATION HISTORY & EMAIL DELIVERY */}
       {activeTab === 'executive_summary' && (

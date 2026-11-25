@@ -31,7 +31,8 @@ import {
   CoinPurchaseOrder,
   CoinTransferRecord,
   DirectoryPlayer,
-  EconomyConfig
+  EconomyConfig,
+  PlayerVisibilityConfig
 } from '../types';
 import { onAuthStateChanged, type User } from 'firebase/auth';
 import { auth } from '../lib/firebase';
@@ -140,6 +141,9 @@ interface GameContextType {
   // Admin & Financial Management
   payoutConfig: PayoutDestinationConfig;
   gatewayAvailability: GatewayPublicAvailability;
+  playerVisibility: PlayerVisibilityConfig;
+  refreshPlayerVisibility: () => Promise<void>;
+  updatePlayerVisibility: (patch: Partial<Omit<PlayerVisibilityConfig, 'updatedAt' | 'updatedBy'>>) => Promise<boolean>;
   refreshPayoutConfigFromServer: () => Promise<void>;
   updatePayoutConfig: (config: Partial<PayoutDestinationConfig>) => void;
   adminWithdrawals: AdminWithdrawalRecord[];
@@ -232,7 +236,7 @@ interface GameContextType {
   happyHourCampaign: HappyHourCampaign;
   updateHappyHourCampaign: (campaign: Partial<HappyHourCampaign>) => void;
   toggleHappyHour: (active?: boolean) => void;
-  isHappyHourActiveForGame: (game: 'Roulette' | 'Blackjack' | 'Poker' | 'Arena' | 'Top50Casino') => {
+  isHappyHourActiveForGame: (game: 'Roulette' | 'Blackjack' | 'Poker' | 'Greyhounds' | 'Horses' | 'Arena' | 'Top50Casino') => {
     active: boolean;
     multiplier: number;
     title: string;
@@ -261,7 +265,7 @@ interface GameContextType {
   }) => Promise<{ ok: boolean; error?: string; record?: TransactionRecord; destinationWallet?: string }>;
   upgradeSkill: (skill: keyof CharacterSkills) => boolean;
   getSkillUpgradeCost: (skill: keyof CharacterSkills) => number;
-  executeBet: (game: 'Roulette' | 'Blackjack' | 'Poker' | 'Arena' | 'Top50Casino', betAmount: number, winAmount: number, details: string) => Promise<{ won: boolean; net: number; round: ProvablyFairRound }>;
+  executeBet: (game: 'Roulette' | 'Blackjack' | 'Poker' | 'Greyhounds' | 'Horses' | 'Arena' | 'Top50Casino', betAmount: number, winAmount: number, details: string) => Promise<{ won: boolean; net: number; round: ProvablyFairRound }>;
   addNotification: (title: string, message: string, type: 'success' | 'security' | 'reward' | 'info', amount?: number) => void;
   clearNotification: (id: string) => void;
   clearAllNotifications: () => void;
@@ -605,7 +609,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           '¡Bienvenido gokudemo! Tu cuenta demo aislada cuenta con $5,000 USD (6,250 monedas) para probar todos los juegos sin riesgo.',
           'reward'
         );
-        setActiveTab('top_50_casino');
+        setActiveTab('store');
         return true;
       }
 
@@ -641,7 +645,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         '¡Bienvenido gokudemo! Tu cuenta demo aislada cuenta con $5,000 USD (6,250 monedas) para probar todos los juegos sin riesgo.',
         'reward'
       );
-      setActiveTab('top_50_casino');
+      setActiveTab('store');
       return true;
     } else {
       soundFx.playClick();
@@ -708,7 +712,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         `Sesión de prueba activa para ${resolvedEmail} (${syncedCoins.toLocaleString()} monedas). Listo para jugar, transferir y probar PayPal/USDT.`,
         'info'
       );
-      setActiveTab('top_50_casino');
+      setActiveTab('store');
       return { ok: true };
     } catch {
       return { ok: false, error: 'Error conectando con el servidor de pruebas VM.' };
@@ -835,6 +839,70 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     preferredVirtualCard: 'REDOTPAY'
   });
 
+  const [playerVisibility, setPlayerVisibility] = useState<PlayerVisibilityConfig>({
+    showTop50Casino: false,
+    showCharacterHero: false,
+    showArenaBattle: false,
+    showStoreCatalog: false,
+    showSecurityTools: false,
+    showNeobankCard: false,
+    updatedAt: Date.now(),
+    updatedBy: OWNER_EMAIL
+  });
+
+  const refreshPlayerVisibility = useCallback(async () => {
+    try {
+      const res = await fetch('/api/config/player-visibility');
+      if (res.ok) {
+        const data = (await res.json()) as { config?: PlayerVisibilityConfig };
+        if (data.config) {
+          setPlayerVisibility(data.config);
+        }
+      }
+    } catch {
+      // ignore offline fallback
+    }
+  }, []);
+
+  const updatePlayerVisibility = async (
+    patch: Partial<Omit<PlayerVisibilityConfig, 'updatedAt' | 'updatedBy'>>
+  ): Promise<boolean> => {
+    if (!isOwner || !authToken) return false;
+    try {
+      const res = await fetch('/api/admin/player-visibility', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify(patch)
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { config?: PlayerVisibilityConfig };
+        if (data.config) {
+          setPlayerVisibility(data.config);
+        }
+        soundFx.playCoinChime();
+        addNotification(
+          'Visibilidad Actualizada',
+          'Los cambios de visibilidad para jugadores ya se reflejan en el casino.',
+          'security'
+        );
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void refreshPlayerVisibility();
+    }, 25000);
+    return () => window.clearInterval(id);
+  }, [refreshPlayerVisibility]);
+
   const refreshPayoutConfigFromServer = useCallback(async () => {
     try {
       const res = await fetch('/api/payments/usdt-config');
@@ -842,11 +910,20 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const serverCfg = (await res.json()) as Partial<PayoutDestinationConfig> & {
           gatewayAvailability?: GatewayPublicAvailability;
           economyConfig?: EconomyConfig;
+          playerVisibility?: PlayerVisibilityConfig;
         };
-        const { gatewayAvailability: gwAvail, economyConfig: econCfg, ...rest } = serverCfg;
+        const {
+          gatewayAvailability: gwAvail,
+          economyConfig: econCfg,
+          playerVisibility: visCfg,
+          ...rest
+        } = serverCfg;
         setPayoutConfig(prev => ({ ...prev, ...rest }));
         if (gwAvail) {
           setGatewayAvailability(gwAvail);
+        }
+        if (visCfg) {
+          setPlayerVisibility(visCfg);
         }
         if (econCfg) {
           setVaultRetentionRate(econCfg.vaultRetentionPct);
@@ -2075,7 +2152,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
   };
 
-  const isHappyHourActiveForGame = useCallback((game: 'Roulette' | 'Blackjack' | 'Poker' | 'Arena' | 'Top50Casino') => {
+  const isHappyHourActiveForGame = useCallback((game: 'Roulette' | 'Blackjack' | 'Poker' | 'Greyhounds' | 'Horses' | 'Arena' | 'Top50Casino') => {
     if (!happyHourCampaign.isActive) {
       return { active: false, multiplier: 1.0, title: '', remainingSeconds: 0, targetGroup: '', gameSection: '' };
     }
@@ -2091,6 +2168,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       (happyHourCampaign.gameSection === 'ROULETTE' && game === 'Roulette') ||
       (happyHourCampaign.gameSection === 'BLACKJACK' && game === 'Blackjack') ||
       (happyHourCampaign.gameSection === 'POKER' && game === 'Poker') ||
+      (happyHourCampaign.gameSection === 'GREYHOUNDS' && game === 'Greyhounds') ||
+      (happyHourCampaign.gameSection === 'HORSES' && game === 'Horses') ||
       (happyHourCampaign.gameSection === 'ARENA' && game === 'Arena') ||
       (happyHourCampaign.gameSection === 'TOP_50_CASINO' && game === 'Top50Casino');
 
@@ -3551,7 +3630,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Execute a Provably Fair Casino Bet or Arena outcome
   const executeBet = async (
-    game: 'Roulette' | 'Blackjack' | 'Poker' | 'Arena' | 'Top50Casino',
+    game: 'Roulette' | 'Blackjack' | 'Poker' | 'Greyhounds' | 'Horses' | 'Arena' | 'Top50Casino',
     betAmount: number,
     winAmount: number,
     details: string
@@ -3738,6 +3817,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsAuthModalOpen,
         payoutConfig,
         gatewayAvailability,
+        playerVisibility,
+        refreshPlayerVisibility,
+        updatePlayerVisibility,
         refreshPayoutConfigFromServer,
         updatePayoutConfig,
         adminWithdrawals,

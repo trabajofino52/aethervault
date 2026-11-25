@@ -211,6 +211,18 @@ export function getDb(): DatabaseSync {
       created_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS player_visibility_config (
+      id TEXT PRIMARY KEY,
+      show_top50_casino INTEGER NOT NULL DEFAULT 0,
+      show_character_hero INTEGER NOT NULL DEFAULT 0,
+      show_arena_battle INTEGER NOT NULL DEFAULT 0,
+      show_store_catalog INTEGER NOT NULL DEFAULT 0,
+      show_security_tools INTEGER NOT NULL DEFAULT 0,
+      show_neobank_card INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL,
+      updated_by TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tickets_user_email ON support_tickets(user_email);
     CREATE INDEX IF NOT EXISTS idx_tickets_status ON support_tickets(status);
     CREATE INDEX IF NOT EXISTS idx_audit_ts ON security_audit_logs(timestamp DESC);
@@ -334,6 +346,17 @@ function seedInitialSecurityRecords(db: DatabaseSync): void {
       INSERT INTO economy_config (id, vault_retention_pct, redemption_fee_pct, transfer_fee_pct, updated_at, updated_by)
       VALUES (?, 70, 20, 5, ?, ?)
     `).run('econ_default', now, OWNER_EMAIL);
+  }
+
+  const visRow = db.prepare('SELECT id FROM player_visibility_config WHERE id = ?').get('vis_default');
+  if (!visRow) {
+    db.prepare(`
+      INSERT INTO player_visibility_config (
+        id, show_top50_casino, show_character_hero, show_arena_battle,
+        show_store_catalog, show_security_tools, show_neobank_card,
+        updated_at, updated_by
+      ) VALUES (?, 0, 0, 0, 0, 0, 0, ?, ?)
+    `).run('vis_default', now, OWNER_EMAIL);
   }
 
   const payoutRow = db.prepare('SELECT id FROM payout_destinations_encrypted WHERE owner_email = ?').get(OWNER_EMAIL);
@@ -523,6 +546,7 @@ export function classifyAuditAction(action: string): AuditTrailCategory {
     upper.includes('ACCOUNT_LOCKED') ||
     upper.includes('PLAYER_SESSION') ||
     upper.includes('PLAYER_REGISTERED') ||
+    upper.includes('PLAYER_VISIBILITY') ||
     upper.includes('OWNER_AUTH') ||
     upper.includes('VM_TESTER')
   ) {
@@ -2403,6 +2427,120 @@ export function saveEconomyConfigInDb(params: {
     updatedAt: now,
     updatedBy: params.adminEmail
   };
+}
+
+export interface DbPlayerVisibilityConfig {
+  showTop50Casino: boolean;
+  showCharacterHero: boolean;
+  showArenaBattle: boolean;
+  showStoreCatalog: boolean;
+  showSecurityTools: boolean;
+  showNeobankCard: boolean;
+  updatedAt: number;
+  updatedBy: string;
+}
+
+export function getPlayerVisibilityConfigFromDb(): DbPlayerVisibilityConfig {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT show_top50_casino, show_character_hero, show_arena_battle,
+              show_store_catalog, show_security_tools, show_neobank_card,
+              updated_at, updated_by
+       FROM player_visibility_config WHERE id = ?`
+    )
+    .get('vis_default') as
+    | {
+        show_top50_casino: number;
+        show_character_hero: number;
+        show_arena_battle: number;
+        show_store_catalog: number;
+        show_security_tools: number;
+        show_neobank_card: number;
+        updated_at: number;
+        updated_by: string;
+      }
+    | undefined;
+
+  if (!row) {
+    return {
+      showTop50Casino: false,
+      showCharacterHero: false,
+      showArenaBattle: false,
+      showStoreCatalog: false,
+      showSecurityTools: false,
+      showNeobankCard: false,
+      updatedAt: Date.now(),
+      updatedBy: OWNER_EMAIL
+    };
+  }
+
+  return {
+    showTop50Casino: row.show_top50_casino === 1,
+    showCharacterHero: row.show_character_hero === 1,
+    showArenaBattle: row.show_arena_battle === 1,
+    showStoreCatalog: row.show_store_catalog === 1,
+    showSecurityTools: row.show_security_tools === 1,
+    showNeobankCard: row.show_neobank_card === 1,
+    updatedAt: row.updated_at,
+    updatedBy: row.updated_by
+  };
+}
+
+export function savePlayerVisibilityConfigInDb(params: {
+  patch: Partial<Omit<DbPlayerVisibilityConfig, 'updatedAt' | 'updatedBy'>>;
+  adminEmail: string;
+  ipAddress: string;
+}): DbPlayerVisibilityConfig {
+  const db = getDb();
+  const current = getPlayerVisibilityConfigFromDb();
+  const next: DbPlayerVisibilityConfig = {
+    showTop50Casino: params.patch.showTop50Casino ?? current.showTop50Casino,
+    showCharacterHero: params.patch.showCharacterHero ?? current.showCharacterHero,
+    showArenaBattle: params.patch.showArenaBattle ?? current.showArenaBattle,
+    showStoreCatalog: params.patch.showStoreCatalog ?? current.showStoreCatalog,
+    showSecurityTools: params.patch.showSecurityTools ?? current.showSecurityTools,
+    showNeobankCard: params.patch.showNeobankCard ?? current.showNeobankCard,
+    updatedAt: Date.now(),
+    updatedBy: params.adminEmail
+  };
+
+  db.prepare(`
+    INSERT INTO player_visibility_config (
+      id, show_top50_casino, show_character_hero, show_arena_battle,
+      show_store_catalog, show_security_tools, show_neobank_card,
+      updated_at, updated_by
+    )
+    VALUES ('vis_default', ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      show_top50_casino = excluded.show_top50_casino,
+      show_character_hero = excluded.show_character_hero,
+      show_arena_battle = excluded.show_arena_battle,
+      show_store_catalog = excluded.show_store_catalog,
+      show_security_tools = excluded.show_security_tools,
+      show_neobank_card = excluded.show_neobank_card,
+      updated_at = excluded.updated_at,
+      updated_by = excluded.updated_by
+  `).run(
+    next.showTop50Casino ? 1 : 0,
+    next.showCharacterHero ? 1 : 0,
+    next.showArenaBattle ? 1 : 0,
+    next.showStoreCatalog ? 1 : 0,
+    next.showSecurityTools ? 1 : 0,
+    next.showNeobankCard ? 1 : 0,
+    next.updatedAt,
+    next.updatedBy
+  );
+
+  appendAuditLog(
+    params.adminEmail,
+    params.ipAddress,
+    'PLAYER_VISIBILITY_UPDATED',
+    'INFO',
+    `Visibilidad para jugadores actualizada: Top50=${next.showTop50Casino}, Hero=${next.showCharacterHero}, Arena=${next.showArenaBattle}, Catálogo=${next.showStoreCatalog}, SeguridadHeader=${next.showSecurityTools}, Neobanco=${next.showNeobankCard}.`
+  );
+
+  return next;
 }
 
 export interface DbRedemptionRequest {

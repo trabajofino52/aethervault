@@ -45,6 +45,8 @@ import {
   applySafeVaultRecommendationsInDb,
   getEconomyConfigFromDb,
   saveEconomyConfigInDb,
+  getPlayerVisibilityConfigFromDb,
+  savePlayerVisibilityConfigInDb,
   updateRedemptionPayoutResultInDb,
   settlePayPalCapturedOrderInDb,
   listDirectoryPlayersFromDb,
@@ -368,7 +370,8 @@ async function bootstrapServer() {
       vmTestModeEnabled: cfg.vmTestModeEnabled,
       maxVmTesters: cfg.maxVmTesters,
       gatewayAvailability: getPublicGatewayAvailability(),
-      economyConfig: getEconomyConfigFromDb()
+      economyConfig: getEconomyConfigFromDb(),
+      playerVisibility: getPlayerVisibilityConfigFromDb()
     });
   });
 
@@ -388,6 +391,37 @@ async function bootstrapServer() {
       vaultRetentionPct: Number(body.vaultRetentionPct ?? 70),
       redemptionFeePct: Number(body.redemptionFeePct ?? 20),
       transferFeePct: body.transferFeePct !== undefined ? Number(body.transferFeePct) : undefined,
+      adminEmail: OWNER_EMAIL,
+      ipAddress: ip
+    });
+    res.json({ ok: true, config: updated });
+  });
+
+  // Authoritative Player Visibility Matrix (Admin controls which additional options players can see)
+  app.get('/api/config/player-visibility', (_req, res) => {
+    res.json({ config: getPlayerVisibilityConfigFromDb() });
+  });
+
+  app.put('/api/admin/player-visibility', requireOwner, (req: AuthenticatedRequest, res) => {
+    const ip = req.clientIp || extractClientIp(req);
+    const body = (req.body || {}) as {
+      showTop50Casino?: boolean;
+      showCharacterHero?: boolean;
+      showArenaBattle?: boolean;
+      showStoreCatalog?: boolean;
+      showSecurityTools?: boolean;
+      showNeobankCard?: boolean;
+    };
+    const patch: Record<string, boolean> = {};
+    if (typeof body.showTop50Casino === 'boolean') patch.showTop50Casino = body.showTop50Casino;
+    if (typeof body.showCharacterHero === 'boolean') patch.showCharacterHero = body.showCharacterHero;
+    if (typeof body.showArenaBattle === 'boolean') patch.showArenaBattle = body.showArenaBattle;
+    if (typeof body.showStoreCatalog === 'boolean') patch.showStoreCatalog = body.showStoreCatalog;
+    if (typeof body.showSecurityTools === 'boolean') patch.showSecurityTools = body.showSecurityTools;
+    if (typeof body.showNeobankCard === 'boolean') patch.showNeobankCard = body.showNeobankCard;
+
+    const updated = savePlayerVisibilityConfigInDb({
+      patch,
       adminEmail: OWNER_EMAIL,
       ipAddress: ip
     });
