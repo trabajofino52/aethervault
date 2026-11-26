@@ -273,12 +273,24 @@ export function getDb(): DatabaseSync {
     db.exec('ALTER TABLE player_redemption_requests ADD COLUMN external_payout_id TEXT;');
   }
 
-  // Safe schema evolution for users.has_custom_password
+  // Safe schema evolution for users (custom password, username, preferred payout method/address)
   const userCols = db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>;
   const userColNames = new Set(userCols.map(c => c.name));
   if (!userColNames.has('has_custom_password')) {
     db.exec('ALTER TABLE users ADD COLUMN has_custom_password INTEGER NOT NULL DEFAULT 0;');
   }
+  if (!userColNames.has('username')) {
+    db.exec('ALTER TABLE users ADD COLUMN username TEXT;');
+  }
+  if (!userColNames.has('preferred_payout_method')) {
+    db.exec("ALTER TABLE users ADD COLUMN preferred_payout_method TEXT NOT NULL DEFAULT 'USDT';");
+  }
+  if (!userColNames.has('preferred_payout_address_enc')) {
+    db.exec('ALTER TABLE users ADD COLUMN preferred_payout_address_enc TEXT;');
+  }
+  db.exec(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(LOWER(username)) WHERE username IS NOT NULL AND username != '';"
+  );
 
   dbInstance = db;
   seedInitialSecurityRecords(db);
@@ -741,6 +753,7 @@ export function verifyDatabaseIntegrity(): {
 export interface DbUserRow {
   id: string;
   email: string;
+  username?: string | null;
   display_name: string;
   role: 'OWNER' | 'DEMO' | 'PLAYER';
   password_hash: string;
@@ -748,52 +761,115 @@ export interface DbUserRow {
   is_demo_isolated: number;
   coins_balance: number;
   has_custom_password?: number;
+  preferred_payout_method?: string | null;
+  preferred_payout_address_enc?: string | null;
   failed_attempts: number;
   locked_until: number;
 }
 
+export type PreferredPayoutMethod = 'USDT' | 'PAYPAL';
+
 export interface PublicUserProfile {
   email: string;
+  username?: string;
   displayName: string;
   role: 'OWNER' | 'DEMO' | 'PLAYER';
   isActive: boolean;
   isDemoIsolated: boolean;
   coinsBalance: number;
+  preferredPayoutMethod: PreferredPayoutMethod;
+  preferredPayoutAddress: string;
 }
 
 const EMAIL_FORMAT_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const USERNAME_FORMAT_REGEX = /^[a-zA-Z0-9._-]{3,32}$/;
+
+function normalizePayoutMethod(raw?: string | null): PreferredPayoutMethod {
+  return String(raw || '').trim().toUpperCase() === 'PAYPAL' ? 'PAYPAL' : 'USDT';
+}
+
+function safeDecryptPayoutAddress(enc?: string | null): string {
+  if (!enc) return '';
+  try {
+    return decryptField(enc);
+  } catch {
+    return '';
+  }
+}
 
 export function getUserSessionProfileByEmail(emailInput: string): PublicUserProfile | null {
   const db = getDb();
   const row = db
     .prepare(
-      'SELECT email, display_name, role, is_active, is_demo_isolated, coins_balance FROM users WHERE LOWER(email) = LOWER(?)'
+      `SELECT email, username, display_name, role, is_active, is_demo_isolated, coins_balance,
+              preferred_payout_method, preferred_payout_address_enc
+       FROM users
+       WHERE LOWER(email) = LOWER(?)`
     )
     .get(emailInput.trim()) as
     | {
         email: string;
+        username: string | null;
         display_name: string;
         role: 'OWNER' | 'DEMO' | 'PLAYER';
         is_active: number;
         is_demo_isolated: number;
         coins_balance: number;
+        preferred_payout_method: string | null;
+        preferred_payout_address_enc: string | null;
       }
     | undefined;
   if (!row) return null;
   return {
     email: row.email,
+    username: row.username || undefined,
     displayName: row.display_name,
     role: row.role,
     isActive: row.is_active === 1,
     isDemoIsolated: row.is_demo_isolated === 1,
-    coinsBalance: row.coins_balance
+    coinsBalance: row.coins_balance,
+    preferredPayoutMethod: normalizePayoutMethod(row.preferred_payout_method),
+    preferredPayoutAddress: safeDecryptPayoutAddress(row.preferred_payout_address_enc)
   };
 }
 
+function validatePayoutPreferenceInput(
+  methodInput?: string,
+  addressInput?: string
+): { ok: true; method: PreferredPayoutMethod; address: string } | { ok: false; message: string } {
+  const method = normalizePayoutMethod(methodInput);
+  const cleanAddr = typeof addressInput === 'string' ? addressInput.trim() : '';
+  if (!cleanAddr) {
+    return {
+      ok: false,
+      message:
+        method === 'PAYPAL'
+          ? 'Ingresa el correo de tu cuenta PayPal para recibir tus pagos.'
+          : 'Ingresa tu dirección de billetera USDT (TRC-20, ERC-20 o BEP-20) para recibir tus pagos.'
+    };
+  }
+  if (method === 'PAYPAL') {
+    if (!EMAIL_FORMAT_REGEX.test(cleanAddr) || cleanAddr.length > 160) {
+      return { ok: false, message: 'El correo de PayPal ingresado no tiene un formato válido.' };
+    }
+    return { ok: true, method: 'PAYPAL', address: cleanAddr.toLowerCase() };
+  }
+  if (cleanAddr.length < 10 || cleanAddr.length > 128 || /\s/.test(cleanAddr)) {
+    return {
+      ok: false,
+      message: 'La dirección de billetera USDT debe tener al menos 10 caracteres sin espacios.'
+    };
+  }
+  return { ok: true, method: 'USDT', address: cleanAddr };
+}
+
 export function registerEmailUserInDb(params: {
+  username?: string;
   email: string;
   password: string;
   displayName?: string;
+  preferredPayoutMethod?: string;
+  preferredPayoutAddress?: string;
   ipAddress: string;
 }): {
   ok: boolean;
@@ -803,11 +879,31 @@ export function registerEmailUserInDb(params: {
 } {
   const db = getDb();
   const cleanEmail = params.email.trim().toLowerCase();
+  const cleanUsername = typeof params.username === 'string' ? params.username.trim().toLowerCase() : '';
   const cleanPassword = params.password;
   const rawName = typeof params.displayName === 'string' ? params.displayName.trim() : '';
 
   if (!cleanEmail || cleanEmail.length > 160 || !EMAIL_FORMAT_REGEX.test(cleanEmail)) {
     return { ok: false, status: 400, message: 'Ingresa un correo electrónico válido.' };
+  }
+
+  if (cleanUsername) {
+    if (!USERNAME_FORMAT_REGEX.test(cleanUsername)) {
+      return {
+        ok: false,
+        status: 400,
+        message: 'El usuario debe tener entre 3 y 32 caracteres (letras, números, punto, guion o guion bajo).'
+      };
+    }
+    if (
+      cleanUsername === DEMO_USERNAME ||
+      cleanUsername === 'trabajofino52' ||
+      cleanUsername === 'admin' ||
+      cleanUsername === 'owner' ||
+      /^tester\d+$/.test(cleanUsername)
+    ) {
+      return { ok: false, status: 403, message: 'Ese nombre de usuario está reservado por el sistema.' };
+    }
   }
 
   if (
@@ -834,6 +930,14 @@ export function registerEmailUserInDb(params: {
     };
   }
 
+  const payoutValidation = validatePayoutPreferenceInput(
+    params.preferredPayoutMethod,
+    params.preferredPayoutAddress
+  );
+  if (!payoutValidation.ok) {
+    return { ok: false, status: 400, message: payoutValidation.message };
+  }
+
   const existing = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(cleanEmail) as
     | { id: string }
     | undefined;
@@ -841,43 +945,121 @@ export function registerEmailUserInDb(params: {
     return {
       ok: false,
       status: 409,
-      message: 'Este correo ya está registrado. Inicia sesión con tu contraseña.'
+      message: 'Este correo ya está registrado. Inicia sesión con tu usuario y contraseña.'
     };
   }
 
-  const cleanDisplayName = (rawName || cleanEmail.split('@')[0]).replace(/[<>]/g, '').slice(0, 60) || 'Jugador';
+  if (cleanUsername) {
+    const existingUsername = db
+      .prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)')
+      .get(cleanUsername, cleanUsername) as { id: string } | undefined;
+    if (existingUsername) {
+      return {
+        ok: false,
+        status: 409,
+        message: 'Ese nombre de usuario ya está ocupado. Elige otro distinto.'
+      };
+    }
+  }
+
+  const cleanDisplayName =
+    (rawName || cleanUsername || cleanEmail.split('@')[0]).replace(/[<>]/g, '').slice(0, 60) || 'Jugador';
   const newId = 'usr_' + crypto.randomUUID().slice(0, 12);
   const now = Date.now();
+  const encryptedPayoutAddr = encryptField(payoutValidation.address);
 
   db.prepare(`
     INSERT INTO users (
-      id, email, display_name, role, password_hash,
+      id, email, username, display_name, role, password_hash,
       is_active, is_demo_isolated, coins_balance, has_custom_password,
+      preferred_payout_method, preferred_payout_address_enc,
       created_at, updated_at
     )
-    VALUES (?, ?, ?, 'PLAYER', ?, 0, 0, 0, 1, ?, ?)
-  `).run(newId, cleanEmail, cleanDisplayName, hashPassword(cleanPassword), now, now);
+    VALUES (?, ?, ?, ?, 'PLAYER', ?, 0, 0, 0, 1, ?, ?, ?, ?)
+  `).run(
+    newId,
+    cleanEmail,
+    cleanUsername || null,
+    cleanDisplayName,
+    hashPassword(cleanPassword),
+    payoutValidation.method,
+    encryptedPayoutAddr,
+    now,
+    now
+  );
 
   appendAuditLog(
     cleanEmail,
     params.ipAddress,
     'PLAYER_REGISTERED',
     'INFO',
-    `Nuevo usuario registrado por correo (${cleanDisplayName}). Cuenta lista para comprar monedas.`
+    `Nuevo usuario SQLite (${cleanUsername || cleanDisplayName}) registrado con método de pago preferido: ${payoutValidation.method}.`
   );
 
   return {
     ok: true,
     status: 201,
-    message: 'Cuenta creada exitosamente. Ya puedes comprar tus monedas en la Tienda.',
+    message: `Usuario creado en SQLite con cobro configurado por ${payoutValidation.method}. Ya puedes comprar tus monedas.`,
     user: {
       email: cleanEmail,
+      username: cleanUsername || undefined,
       displayName: cleanDisplayName,
       role: 'PLAYER',
       isActive: false,
       isDemoIsolated: false,
-      coinsBalance: 0
+      coinsBalance: 0,
+      preferredPayoutMethod: payoutValidation.method,
+      preferredPayoutAddress: payoutValidation.address
     }
+  };
+}
+
+export function updateUserPayoutPreferenceInDb(params: {
+  actorEmail: string;
+  preferredPayoutMethod: string;
+  preferredPayoutAddress: string;
+  ipAddress: string;
+}): {
+  ok: boolean;
+  status: number;
+  message: string;
+  preferredPayoutMethod?: PreferredPayoutMethod;
+  preferredPayoutAddress?: string;
+} {
+  const db = getDb();
+  const validation = validatePayoutPreferenceInput(params.preferredPayoutMethod, params.preferredPayoutAddress);
+  if (!validation.ok) {
+    return { ok: false, status: 400, message: validation.message };
+  }
+
+  const now = Date.now();
+  const enc = encryptField(validation.address);
+  const res = db
+    .prepare(
+      `UPDATE users
+       SET preferred_payout_method = ?, preferred_payout_address_enc = ?, updated_at = ?
+       WHERE LOWER(email) = LOWER(?)`
+    )
+    .run(validation.method, enc, now, params.actorEmail.trim());
+
+  if (res.changes === 0) {
+    return { ok: false, status: 404, message: 'Usuario no encontrado en SQLite.' };
+  }
+
+  appendAuditLog(
+    params.actorEmail,
+    params.ipAddress,
+    'PAYOUT_PREFERENCE_UPDATED',
+    'INFO',
+    `Método de pago preferido actualizado en SQLite a ${validation.method}.`
+  );
+
+  return {
+    ok: true,
+    status: 200,
+    message: `Método de pago preferido guardado en SQLite: ${validation.method}.`,
+    preferredPayoutMethod: validation.method,
+    preferredPayoutAddress: validation.address
   };
 }
 
@@ -894,7 +1076,7 @@ export function authenticateUserInDb(
   const db = getDb();
   const rawInput = emailInput.trim().toLowerCase();
   const vmAliasMatch = /^tester(0[1-9]|10)$/.exec(rawInput);
-  const cleanEmail =
+  const cleanIdentifier =
     rawInput === 'gokudemo@aethervault.com'
       ? DEMO_USERNAME
       : rawInput === OWNER_EMAIL.toLowerCase()
@@ -903,41 +1085,49 @@ export function authenticateUserInDb(
       ? `tester${vmAliasMatch[1]}@vm.aethervault.local`
       : rawInput;
 
-  const existing = db.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)').get(cleanEmail) as DbUserRow | undefined;
+  const existing = db
+    .prepare(
+      `SELECT * FROM users
+       WHERE LOWER(email) = LOWER(?)
+          OR (username IS NOT NULL AND username != '' AND LOWER(username) = LOWER(?))`
+    )
+    .get(cleanIdentifier, cleanIdentifier) as DbUserRow | undefined;
   const now = Date.now();
 
   if (!existing) {
     // Prevent unauthorized ad-hoc VM tester #11+
-    if (cleanEmail.endsWith('@vm.aethervault.local') || /^tester\d+/.test(cleanEmail)) {
+    if (cleanIdentifier.endsWith('@vm.aethervault.local') || /^tester\d+/.test(cleanIdentifier)) {
       return {
         ok: false,
         status: 403,
         message: `Límite de entorno VM: máximo ${MAX_VM_TESTERS} usuarios de prueba simultáneos (tester01 a tester10).`
       };
     }
-    if (cleanEmail === OWNER_EMAIL.toLowerCase() || cleanEmail === DEMO_USERNAME) {
+    if (cleanIdentifier === OWNER_EMAIL.toLowerCase() || cleanIdentifier === DEMO_USERNAME) {
       return { ok: false, status: 401, message: 'Credenciales inválidas.' };
     }
-    if (cleanEmail === 'jugador_real@aethervault.com' || cleanEmail === 'jugador_anonimo@aethervault.com') {
+    if (cleanIdentifier === 'jugador_real@aethervault.com' || cleanIdentifier === 'jugador_anonimo@aethervault.com') {
       const newId = 'usr_' + crypto.randomUUID().slice(0, 10);
       const pwdToStore = passwordInput.trim() || crypto.randomBytes(12).toString('hex');
       db.prepare(`
         INSERT INTO users (id, email, display_name, role, password_hash, is_active, is_demo_isolated, coins_balance, has_custom_password, created_at, updated_at)
         VALUES (?, ?, ?, 'PLAYER', ?, 0, 0, 0, 0, ?, ?)
-      `).run(newId, cleanEmail, cleanEmail.split('@')[0], hashPassword(pwdToStore), now, now);
+      `).run(newId, cleanIdentifier, cleanIdentifier.split('@')[0], hashPassword(pwdToStore), now, now);
 
-      appendAuditLog(cleanEmail, ipAddress, 'PLAYER_REGISTERED_PENDING_DEPOSIT', 'INFO', 'Cuenta estándar creada (inactiva hasta confirmación de depósito).');
+      appendAuditLog(cleanIdentifier, ipAddress, 'PLAYER_REGISTERED_PENDING_DEPOSIT', 'INFO', 'Cuenta estándar creada (inactiva hasta confirmación de depósito).');
       return {
         ok: true,
         status: 200,
         message: 'Sesión estándar iniciada.',
         user: {
-          email: cleanEmail,
-          displayName: cleanEmail.split('@')[0],
+          email: cleanIdentifier,
+          displayName: cleanIdentifier.split('@')[0],
           role: 'PLAYER',
           isActive: false,
           isDemoIsolated: false,
-          coinsBalance: 0
+          coinsBalance: 0,
+          preferredPayoutMethod: 'USDT',
+          preferredPayoutAddress: ''
         }
       };
     }
@@ -945,7 +1135,7 @@ export function authenticateUserInDb(
     return {
       ok: false,
       status: 404,
-      message: 'Correo no registrado. Regístrate primero en la pestaña "Registrar Correo".'
+      message: 'Usuario o correo no registrado. Selecciona "Crear Usuario" para registrarte.'
     };
   }
 
@@ -971,11 +1161,14 @@ export function authenticateUserInDb(
       message: 'Sesión de jugador iniciada.',
       user: {
         email: existing.email,
+        username: existing.username || undefined,
         displayName: existing.display_name,
         role: 'PLAYER',
         isActive: existing.is_active === 1,
         isDemoIsolated: false,
-        coinsBalance: existing.coins_balance
+        coinsBalance: existing.coins_balance,
+        preferredPayoutMethod: normalizePayoutMethod(existing.preferred_payout_method),
+        preferredPayoutAddress: safeDecryptPayoutAddress(existing.preferred_payout_address_enc)
       }
     };
   }
@@ -1010,13 +1203,13 @@ export function authenticateUserInDb(
       status: 401,
       message: lockUntil > 0
         ? 'Demasiados intentos fallidos. Cuenta bloqueada por 15 minutos por seguridad.'
-        : 'Credenciales inválidas.'
+        : 'Usuario o contraseña incorrectos.'
     };
   }
 
   // Success: reset failed attempts
   db.prepare('UPDATE users SET failed_attempts = 0, locked_until = 0, updated_at = ? WHERE id = ?').run(now, existing.id);
-  appendAuditLog(existing.email, ipAddress, `LOGIN_SUCCESS_${existing.role}`, 'INFO', `Acceso verificado con scrypt (Rol: ${existing.role}).`);
+  appendAuditLog(existing.email, ipAddress, `LOGIN_SUCCESS_${existing.role}`, 'INFO', `Acceso SQLite verificado con scrypt (Rol: ${existing.role}).`);
 
   return {
     ok: true,
@@ -1024,11 +1217,14 @@ export function authenticateUserInDb(
     message: 'Autenticación criptográfica exitosa.',
     user: {
       email: existing.email,
+      username: existing.username || undefined,
       displayName: existing.display_name,
       role: existing.role,
       isActive: existing.is_active === 1,
       isDemoIsolated: existing.is_demo_isolated === 1,
-      coinsBalance: existing.coins_balance
+      coinsBalance: existing.coins_balance,
+      preferredPayoutMethod: normalizePayoutMethod(existing.preferred_payout_method),
+      preferredPayoutAddress: safeDecryptPayoutAddress(existing.preferred_payout_address_enc)
     }
   };
 }
@@ -2716,35 +2912,45 @@ export interface DbRedemptionRequest {
 
 export function listRedeemableUsersFromDb(): Array<{
   email: string;
+  username?: string;
   displayName: string;
   role: string;
   isActive: boolean;
   coinsBalance: number;
   maxAllowed30PctCoins: number;
+  preferredPayoutMethod: PreferredPayoutMethod;
+  preferredPayoutAddress: string;
 }> {
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT email, display_name, role, is_active, coins_balance
+      `SELECT email, username, display_name, role, is_active, coins_balance,
+              preferred_payout_method, preferred_payout_address_enc
        FROM users
        WHERE is_demo_isolated = 0 AND role <> 'DEMO'
        ORDER BY CASE WHEN role = 'OWNER' THEN 0 ELSE 1 END, email ASC`
     )
     .all() as Array<{
       email: string;
+      username: string | null;
       display_name: string;
       role: string;
       is_active: number;
       coins_balance: number;
+      preferred_payout_method: string | null;
+      preferred_payout_address_enc: string | null;
     }>;
 
   return rows.map(r => ({
     email: r.email,
+    username: r.username || undefined,
     displayName: r.display_name,
     role: r.role,
     isActive: r.is_active === 1,
     coinsBalance: r.coins_balance,
-    maxAllowed30PctCoins: Math.floor(r.coins_balance * MAX_CLIENT_WITHDRAWAL_RATIO)
+    maxAllowed30PctCoins: Math.floor(r.coins_balance * MAX_CLIENT_WITHDRAWAL_RATIO),
+    preferredPayoutMethod: normalizePayoutMethod(r.preferred_payout_method),
+    preferredPayoutAddress: safeDecryptPayoutAddress(r.preferred_payout_address_enc)
   }));
 }
 
@@ -3291,10 +3497,10 @@ export function processBtcpayWebhookEventInDb(params: {
   db.prepare(`
     INSERT INTO btcpay_webhook_events (
       id, delivery_id, invoice_id, event_type, user_email, coins_credited,
-      amount_usd, blockchain_confirmed, signature_verified, firestore_synced,
+      amount_usd, blockchain_confirmed, signature_verified, firestore_synced, firestore_synced_at,
       raw_summary, created_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     eventId,
     cleanDelivery,
@@ -3305,6 +3511,8 @@ export function processBtcpayWebhookEventInDb(params: {
     resolvedUsd,
     isBlockchainConfirmedEvent ? 1 : 0,
     params.signatureVerified ? 1 : 0,
+    isBlockchainConfirmedEvent ? 1 : 0,
+    isBlockchainConfirmedEvent ? now : null,
     params.rawSummary.slice(0, 400),
     now
   );
@@ -3318,7 +3526,7 @@ export function processBtcpayWebhookEventInDb(params: {
     params.ipAddress,
     isBlockchainConfirmedEvent ? 'BTCPAY_WEBHOOK_CONFIRMED' : 'BTCPAY_WEBHOOK_RECEIVED',
     isBlockchainConfirmedEvent ? 'INFO' : 'WARN',
-    `Webhook BTCPay (${params.eventType}) factura=${cleanInvoice} HMAC=${params.signatureVerified ? 'OK' : 'FAIL'} +${creditedCoins} mo -> pendiente sync Firestore.`
+    `Webhook BTCPay (${params.eventType}) factura=${cleanInvoice} HMAC=${params.signatureVerified ? 'OK' : 'FAIL'} +${creditedCoins} mo -> liquidado en SQLite.`
   );
 
   const savedRow = db
@@ -3329,7 +3537,7 @@ export function processBtcpayWebhookEventInDb(params: {
     ok: true,
     duplicate: false,
     message: isBlockchainConfirmedEvent
-      ? `Webhook ${params.eventType} confirmado en blockchain (+${creditedCoins} mo en SQLite, listo para transacción en Firestore).`
+      ? `Webhook ${params.eventType} confirmado en blockchain (+${creditedCoins} mo acreditadas automáticamente en SQLite).`
       : `Webhook ${params.eventType} registrado sin acreditación de saldo.`,
     event: mapBtcpayWebhookRow(savedRow),
     updatedCoinsBalance: userBalRow?.coins_balance
@@ -3583,19 +3791,29 @@ export function settlePayPalCapturedOrderInDb(params: {
   };
 }
 
-export function listDirectoryPlayersFromDb(excludeEmail?: string): Array<{
+export function listDirectoryPlayersFromDb(
+  excludeEmail?: string,
+  includeDirectory: boolean = false
+): Array<{
   id: string;
   email: string;
+  username?: string;
   displayName: string;
   role: 'OWNER' | 'PLAYER' | 'DEMO';
   isActive: boolean;
   coinsBalance: number;
   lastLoginAt: number;
+  preferredPayoutMethod: PreferredPayoutMethod;
+  preferredPayoutAddress: string;
 }> {
+  if (!includeDirectory) {
+    return [];
+  }
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT id, email, display_name, role, is_active, coins_balance, updated_at
+      `SELECT id, email, username, display_name, role, is_active, coins_balance, updated_at,
+              preferred_payout_method, preferred_payout_address_enc
        FROM users
        WHERE is_demo_isolated = 0 AND role <> 'DEMO'
        ORDER BY CASE WHEN role = 'OWNER' THEN 0 ELSE 1 END, email ASC`
@@ -3603,11 +3821,14 @@ export function listDirectoryPlayersFromDb(excludeEmail?: string): Array<{
     .all() as Array<{
       id: string;
       email: string;
+      username: string | null;
       display_name: string;
       role: 'OWNER' | 'PLAYER' | 'DEMO';
       is_active: number;
       coins_balance: number;
       updated_at: number | null;
+      preferred_payout_method: string | null;
+      preferred_payout_address_enc: string | null;
     }>;
 
   const cleanExclude = (excludeEmail || '').trim().toLowerCase();
@@ -3616,11 +3837,14 @@ export function listDirectoryPlayersFromDb(excludeEmail?: string): Array<{
     .map(r => ({
       id: r.id,
       email: r.email,
+      username: r.username || undefined,
       displayName: r.display_name,
       role: r.role,
       isActive: r.is_active === 1,
       coinsBalance: r.coins_balance,
-      lastLoginAt: r.updated_at || 0
+      lastLoginAt: r.updated_at || 0,
+      preferredPayoutMethod: normalizePayoutMethod(r.preferred_payout_method),
+      preferredPayoutAddress: safeDecryptPayoutAddress(r.preferred_payout_address_enc)
     }));
 }
 

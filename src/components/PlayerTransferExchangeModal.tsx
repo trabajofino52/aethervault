@@ -27,6 +27,9 @@ export const PlayerTransferExchangeModal: React.FC = () => {
     setIsStoreOpen,
     coins,
     userEmail,
+    username,
+    preferredPayoutMethod,
+    preferredPayoutAddress,
     authToken,
     isDemoAccount,
     isRealAccountActive,
@@ -246,10 +249,10 @@ export const PlayerTransferExchangeModal: React.FC = () => {
                     <Lock className="w-6 h-6" />
                   </div>
                   <h4 className="text-sm font-bold text-purple-300">
-                    Transferencias Desactivadas en Cuenta Demo (gokudemo)
+                    Transferencias Desactivadas en Cuenta Demo
                   </h4>
                   <p className="text-xs text-slate-400 max-w-md mx-auto">
-                    Las cuentas de prueba VM (tester01..tester10) o usuarios reales registrados pueden enviarse monedas entre sí con liquidación atómica en SQLite.
+                    Los usuarios reales registrados pueden enviarse monedas entre sí con liquidación atómica en el servidor.
                   </p>
                   <button
                     type="button"
@@ -259,7 +262,7 @@ export const PlayerTransferExchangeModal: React.FC = () => {
                     }}
                     className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs"
                   >
-                    Iniciar Sesión con Cuenta Real o Tester VM
+                    Iniciar Sesión con Cuenta Real
                   </button>
                 </div>
               ) : !authToken ? (
@@ -282,16 +285,16 @@ export const PlayerTransferExchangeModal: React.FC = () => {
                 </div>
               ) : (
                 <form onSubmit={handleSendTransfer} className="space-y-4">
-                  {/* Directory Quick Select */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-slate-300 font-bold flex items-center gap-1.5">
-                        <Users className="w-4 h-4 text-cyan-400" />
-                        Jugadores Disponibles en el Servidor ({otherPlayers.length})
-                      </span>
-                      <span className="text-[11px] text-slate-500">Clic para seleccionar destinatario</span>
-                    </div>
-                    {otherPlayers.length > 0 ? (
+                  {/* Directory Quick Select (Only populated for Owner) */}
+                  {otherPlayers.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-300 font-bold flex items-center gap-1.5">
+                          <Users className="w-4 h-4 text-cyan-400" />
+                          Jugadores Disponibles en el Servidor ({otherPlayers.length})
+                        </span>
+                        <span className="text-[11px] text-slate-500">Clic para seleccionar destinatario</span>
+                      </div>
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-36 overflow-y-auto pr-1">
                         {otherPlayers.map(player => {
                           const isSelected = recipientEmail.trim().toLowerCase() === player.email.toLowerCase();
@@ -319,12 +322,8 @@ export const PlayerTransferExchangeModal: React.FC = () => {
                           );
                         })}
                       </div>
-                    ) : (
-                      <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-400">
-                        Ingresa manualmente el correo del jugador registrado en el campo inferior.
-                      </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
 
                   {/* Recipient + Amount */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -340,7 +339,7 @@ export const PlayerTransferExchangeModal: React.FC = () => {
                           setRecipientEmail(e.target.value);
                           setTransferFeedback(null);
                         }}
-                        placeholder="tester02@vm.aethervault.local"
+                        placeholder="destinatario@correo.com"
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-100 focus:outline-none focus:border-amber-400"
                       />
                     </div>
@@ -499,11 +498,22 @@ export const PlayerTransferExchangeModal: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-[11px] font-sans text-slate-300 flex items-start gap-2">
-                  <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                  <span>
-                    Cuando solicitas el canje en PayPal o USDT, la orden entra con <strong>Espera de Autorización</strong>. Al autorizarla <strong>trabajofino52@gmail.com</strong>, el sistema despacha automáticamente el pago vía <strong>PayPal Payouts v1</strong> o registra el lote <strong>USDT TRC-20</strong>.
-                  </span>
+                <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-[11px] font-sans text-slate-300 space-y-1.5">
+                  <div className="flex items-start gap-2">
+                    <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <span>
+                      Cuando solicitas el canje en PayPal o USDT, la orden entra con <strong>Espera de Autorización</strong>. Al autorizarla el <strong>Administrador de Bóveda</strong>, el sistema despacha automáticamente el pago vía <strong>PayPal Payouts</strong> o registra el envío <strong>USDT TRC-20</strong>.
+                    </span>
+                  </div>
+                  {preferredPayoutAddress && (
+                    <div className="pt-1.5 border-t border-slate-800/80 text-emerald-300 font-mono flex flex-wrap items-center justify-between gap-2">
+                      <span>
+                        Tu método guardado en SQLite ({username ? `@${username}` : userEmail}):{' '}
+                        <strong>{preferredPayoutMethod}</strong>
+                      </span>
+                      <span className="truncate max-w-[260px] text-slate-200">{preferredPayoutAddress}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex flex-col sm:flex-row gap-2 pt-1 font-sans">

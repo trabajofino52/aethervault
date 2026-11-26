@@ -178,8 +178,18 @@ export const StoreModal: React.FC = () => {
       return;
     }
 
+    if (selectedMethod === 'paypal' && !liveOrder) {
+      await handleGenerateGatewayInvoice();
+      return;
+    }
+
+    if (selectedMethod === 'paypal' && liveOrder?.gatewayInvoiceId) {
+      await handleCapturePayPalOrder();
+      return;
+    }
+
     if (selectedMethod === 'crypto_usdt' && !usdtTxHash.trim()) {
-      setCheckoutError('Ingresa el TXID / Hash o pulsa "Generar Factura" / "TXID Prueba (VM)" para validar el pago.');
+      setCheckoutError('Ingresa el TXID / Hash de tu transferencia USDT o pulsa "Generar TXID Prueba" para probar en Ngrok.');
       soundFx.playClick();
       return;
     }
@@ -573,16 +583,22 @@ export const StoreModal: React.FC = () => {
                   </div>
 
                   {/* Authoritative Destination Wallet */}
-                  <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between font-mono text-[10px] text-amber-300">
-                    <span className="truncate mr-2">{activeUsdtWallet}</span>
-                    <button
-                      type="button"
-                      onClick={copyAddress}
-                      className="p-1 text-slate-400 hover:text-amber-400 shrink-0"
-                      title="Copiar billetera USDT"
-                    >
-                      {copiedCrypto ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    </button>
+                  <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between text-[10px] text-emerald-400 font-semibold">
+                      <span>Destino Bóveda USDT ({usdtNetwork})</span>
+                      <span>Ingreso Directo</span>
+                    </div>
+                    <div className="flex items-center justify-between font-mono text-[10px] text-amber-300">
+                      <span className="truncate mr-2">{activeUsdtWallet}</span>
+                      <button
+                        type="button"
+                        onClick={copyAddress}
+                        className="p-1 text-slate-400 hover:text-amber-400 shrink-0"
+                        title="Copiar billetera USDT"
+                      >
+                        {copiedCrypto ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
                   </div>
 
                   {/* TXID Verification Input + Helper */}
@@ -591,13 +607,15 @@ export const StoreModal: React.FC = () => {
                       <label className="text-[10px] text-slate-300 font-semibold uppercase tracking-wider">
                         TXID / Hash o Referencia Factura:
                       </label>
-                      <button
-                        type="button"
-                        onClick={handleGenerateVmTestTxid}
-                        className="text-[10px] text-cyan-400 hover:text-cyan-300 underline underline-offset-2 font-mono"
-                      >
-                        Generar TXID Prueba (VM)
-                      </button>
+                      {payoutConfig.vmTestModeEnabled !== false && (
+                        <button
+                          type="button"
+                          onClick={handleGenerateVmTestTxid}
+                          className="text-[10px] text-cyan-400 hover:text-cyan-300 underline underline-offset-2 font-mono"
+                        >
+                          Generar TXID Prueba
+                        </button>
+                      )}
                     </div>
                     <input
                       type="text"
@@ -606,7 +624,7 @@ export const StoreModal: React.FC = () => {
                         setUsdtTxHash(e.target.value);
                         setCheckoutError(null);
                       }}
-                      placeholder="Pega el TXID real o genera uno de prueba VM..."
+                      placeholder="Pega el TXID real o genera uno de prueba..."
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 font-mono text-[11px] text-emerald-300 focus:outline-none focus:border-emerald-400"
                     />
                   </div>

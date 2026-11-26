@@ -257,11 +257,14 @@ export interface EconomyConfig {
 export interface DirectoryPlayer {
   id: string;
   email: string;
+  username?: string;
   displayName: string;
   role: 'OWNER' | 'PLAYER' | 'DEMO';
   isActive: boolean;
   coinsBalance: number;
   lastLoginAt: number;
+  preferredPayoutMethod?: 'USDT' | 'PAYPAL';
+  preferredPayoutAddress?: string;
 }
 
 export interface CoinTransferRecord {

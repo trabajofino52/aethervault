@@ -34,15 +34,6 @@ import {
   EconomyConfig,
   PlayerVisibilityConfig
 } from '../types';
-import { onAuthStateChanged, type User } from 'firebase/auth';
-import { auth } from '../lib/firebase';
-import {
-  syncUserProfileToFirestore,
-  subscribeToUserFirestoreBalance,
-  upsertRedemptionRequestToFirestore,
-  reviewRedemptionRequestInFirestore,
-  subscribeToFirestoreRedemptionRequests
-} from '../services/firestoreVaultService';
 import { logVmExperience, installGlobalErrorTelemetry } from '../utils/telemetry';
 import { COIN_TIERS } from '../data/coinTiers';
 import { soundFx } from '../utils/audio';
@@ -81,21 +72,29 @@ interface GameContextType {
   isHistoryModalOpen: boolean;
   setIsHistoryModalOpen: (open: boolean) => void;
   
-  // User, Owner & Demo Session
+  // User, Owner & Demo Session (SQLite Authoritative)
   userEmail: string;
+  username: string;
+  preferredPayoutMethod: 'USDT' | 'PAYPAL';
+  preferredPayoutAddress: string;
+  updatePayoutPreference: (
+    method: 'USDT' | 'PAYPAL',
+    address: string
+  ) => Promise<{ ok: boolean; message: string }>;
   authToken: string | null;
-  firebaseUser: User | null;
-  firestoreSyncedBalance: number | null;
   isOwner: boolean;
   isDemoAccount: boolean;
   isRealAccountActive: boolean;
   loginUser: (email: string) => void;
-  loginUserWithCredentials: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+  loginUserWithCredentials: (identifier: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   registerUserWithEmail: (params: {
+    username?: string;
     email: string;
     password: string;
     displayName?: string;
-  }) => Promise<{ ok: boolean; error?: string; user?: { email: string; displayName: string; coinsBalance: number } }>;
+    preferredPayoutMethod: 'USDT' | 'PAYPAL';
+    preferredPayoutAddress: string;
+  }) => Promise<{ ok: boolean; error?: string; user?: { email: string; username?: string; displayName: string; coinsBalance: number } }>;
   loginOwnerWithKey: (password: string) => Promise<boolean>;
   loginDemoUser: (password: string) => Promise<boolean>;
   loginVmTester: (testerId: string, password: string) => Promise<{ ok: boolean; error?: string }>;
@@ -107,6 +106,7 @@ interface GameContextType {
   authModalMode: 'LOGIN' | 'REGISTER';
   setAuthModalMode: (mode: 'LOGIN' | 'REGISTER') => void;
   openAuthModal: (mode?: 'LOGIN' | 'REGISTER') => void;
+  isSessionChecking: boolean;
 
   // Modals for Redemption, Level 100, Daily Wheel, Leaderboard, and Referrals
   isRedemptionModalOpen: boolean;
@@ -191,11 +191,14 @@ interface GameContextType {
   redeemableUsers: Array<{
     id: string;
     email: string;
+    username?: string;
     displayName: string;
     role: string;
     isActive: boolean;
     coinsBalance: number;
     maxAllowed30PctCoins: number;
+    preferredPayoutMethod?: 'USDT' | 'PAYPAL';
+    preferredPayoutAddress?: string;
   }>;
   refreshRedemptionsFromServer: () => Promise<void>;
   validateAndCreateAdminRedemption: (params: {
@@ -205,7 +208,6 @@ interface GameContextType {
     destinationType: 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire';
     destinationAddress: string;
   }) => Promise<{ ok: boolean; message: string; request?: PlayerRedemptionRequest }>;
-  syncRedemptionToFirestore: (req: PlayerRedemptionRequest) => Promise<boolean>;
   requestPlayerRedemption: (coins: number, destType: 'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire', destAddress: string) => Promise<boolean>;
   approveRedemptionRequest: (requestId: string) => Promise<boolean>;
   rejectRedemptionRequest: (requestId: string, reason?: string) => Promise<boolean>;
@@ -442,24 +444,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isProvablyFairModalOpen, setIsProvablyFairModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
 
-  // User Authentication & Owner Gate with 256-bit Key
-  const [userEmail, setUserEmail] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_USER_EMAIL);
-      return saved !== null ? saved : OWNER_EMAIL;
-    } catch {
-      return OWNER_EMAIL;
-    }
-  });
-
-  const [isOwnerAuthenticated, setIsOwnerAuthenticated] = useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem('aethervault_owner_auth_v1');
-      return saved !== null ? saved === 'true' : true;
-    } catch {
-      return true;
-    }
-  });
+  // User Authentication & Owner Gate (Never default to Owner or expose user accounts before verified login)
+  const [userEmail, setUserEmail] = useState<string>('jugador_anonimo@aethervault.com');
+  const [username, setUsername] = useState<string>('');
+  const [preferredPayoutMethod, setPreferredPayoutMethod] = useState<'USDT' | 'PAYPAL'>('USDT');
+  const [preferredPayoutAddress, setPreferredPayoutAddress] = useState<string>('');
+  const [isOwnerAuthenticated, setIsOwnerAuthenticated] = useState<boolean>(false);
+  const [isSessionChecking, setIsSessionChecking] = useState<boolean>(true);
 
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
@@ -486,16 +477,37 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           token?: string;
           user?: {
             email: string;
+            username?: string;
             displayName: string;
             role: 'OWNER' | 'DEMO' | 'PLAYER';
             isActive: boolean;
             isDemoIsolated: boolean;
             coinsBalance: number;
+            preferredPayoutMethod?: 'USDT' | 'PAYPAL';
+            preferredPayoutAddress?: string;
           };
         };
-        if (!active || !data.authenticated || !data.user) return;
+        if (!active) return;
+        if (!data.authenticated || !data.user) {
+          setUserEmail('jugador_anonimo@aethervault.com');
+          setUsername('');
+          setPreferredPayoutMethod('USDT');
+          setPreferredPayoutAddress('');
+          setIsOwnerAuthenticated(false);
+          setAuthToken(null);
+          try {
+            localStorage.setItem(STORAGE_KEY_USER_EMAIL, 'jugador_anonimo@aethervault.com');
+            localStorage.setItem('aethervault_owner_auth_v1', 'false');
+          } catch {
+            // ignore
+          }
+          return;
+        }
         if (data.token) setAuthToken(data.token);
         setUserEmail(data.user.email);
+        setUsername(data.user.username || '');
+        setPreferredPayoutMethod(data.user.preferredPayoutMethod === 'PAYPAL' ? 'PAYPAL' : 'USDT');
+        setPreferredPayoutAddress(data.user.preferredPayoutAddress || '');
         const ownerAuth = data.user.role === 'OWNER' && data.user.email.toLowerCase() === OWNER_EMAIL.toLowerCase();
         setIsOwnerAuthenticated(ownerAuth);
         if (typeof data.user.coinsBalance === 'number') {
@@ -521,6 +533,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       })
       .catch(() => {
         // ignore session check network errors
+      })
+      .finally(() => {
+        if (active) setIsSessionChecking(false);
       });
     return () => {
       active = false;
@@ -703,7 +718,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       soundFx.playClick();
       addNotification(
         'Clave Demo Incorrecta',
-        'La clave ingresada para la cuenta demo gokudemo es incorrecta (clave requerida: goku30309982).',
+        'La clave ingresada para la cuenta demo es incorrecta.',
         'security'
       );
       return false;
@@ -788,11 +803,15 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const registerUserWithEmail = async (params: {
+    username?: string;
     email: string;
     password: string;
     displayName?: string;
-  }): Promise<{ ok: boolean; error?: string; user?: { email: string; displayName: string; coinsBalance: number } }> => {
+    preferredPayoutMethod: 'USDT' | 'PAYPAL';
+    preferredPayoutAddress: string;
+  }): Promise<{ ok: boolean; error?: string; user?: { email: string; username?: string; displayName: string; coinsBalance: number } }> => {
     const cleanEmail = params.email.trim().toLowerCase();
+    const cleanUsername = (params.username || '').trim().toLowerCase();
     const cleanPassword = params.password;
     const cleanName = params.displayName?.trim() || '';
 
@@ -802,22 +821,36 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          username: cleanUsername || undefined,
           email: cleanEmail,
           password: cleanPassword,
-          displayName: cleanName
+          displayName: cleanName,
+          preferredPayoutMethod: params.preferredPayoutMethod,
+          preferredPayoutAddress: params.preferredPayoutAddress.trim()
         })
       });
       const data = (await res.json().catch(() => ({}))) as {
         ok?: boolean;
         token?: string;
         error?: string;
-        user?: { email: string; displayName: string; coinsBalance: number; isActive?: boolean };
+        user?: {
+          email: string;
+          username?: string;
+          displayName: string;
+          coinsBalance: number;
+          isActive?: boolean;
+          preferredPayoutMethod?: 'USDT' | 'PAYPAL';
+          preferredPayoutAddress?: string;
+        };
       };
       if (!res.ok || !data.user) {
-        return { ok: false, error: data.error || 'No se pudo completar el registro con correo.' };
+        return { ok: false, error: data.error || 'No se pudo completar el registro en SQLite.' };
       }
       if (data.token) persistAuthToken(data.token);
       setUserEmail(data.user.email);
+      setUsername(data.user.username || '');
+      setPreferredPayoutMethod(data.user.preferredPayoutMethod === 'PAYPAL' ? 'PAYPAL' : 'USDT');
+      setPreferredPayoutAddress(data.user.preferredPayoutAddress || '');
       setIsOwnerAuthenticated(false);
       setCoins(data.user.coinsBalance ?? 0);
       setHasConfirmedRealDeposit(Boolean(data.user.isActive));
@@ -834,41 +867,97 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       soundFx.playWinFanfare();
       addNotification(
-        'Cuenta Registrada por Correo',
-        `¡Bienvenido ${data.user.displayName}! Tu cuenta ${data.user.email} está lista para comprar monedas en la Tienda.`,
+        'Usuario Creado en SQLite',
+        `¡Bienvenido ${data.user.displayName}! Tu método de cobro (${data.user.preferredPayoutMethod || params.preferredPayoutMethod}) quedó guardado.`,
         'success'
       );
       return { ok: true, user: data.user };
     } catch {
-      return { ok: false, error: 'Error de red contactando al servidor de registro.' };
+      return { ok: false, error: 'Error de red contactando al servidor SQLite de registro.' };
+    }
+  };
+
+  const updatePayoutPreference = async (
+    method: 'USDT' | 'PAYPAL',
+    address: string
+  ): Promise<{ ok: boolean; message: string }> => {
+    if (!authToken) {
+      return { ok: false, message: 'Debes iniciar sesión para actualizar tu método de pago.' };
+    }
+    try {
+      const res = await fetch('/api/auth/payout-preference', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          preferredPayoutMethod: method,
+          preferredPayoutAddress: address.trim()
+        })
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        message?: string;
+        error?: string;
+        preferredPayoutMethod?: 'USDT' | 'PAYPAL';
+        preferredPayoutAddress?: string;
+      };
+      if (!res.ok || !data.ok) {
+        return { ok: false, message: data.error || 'No se pudo actualizar tu método de pago.' };
+      }
+      setPreferredPayoutMethod(data.preferredPayoutMethod === 'PAYPAL' ? 'PAYPAL' : 'USDT');
+      setPreferredPayoutAddress(data.preferredPayoutAddress || address.trim());
+      soundFx.playBiometricSuccess();
+      addNotification(
+        'Método de Cobro Actualizado',
+        data.message || `Tu preferencia de cobro quedó guardada en SQLite (${method}).`,
+        'success'
+      );
+      return { ok: true, message: data.message || 'Método de cobro guardado.' };
+    } catch {
+      return { ok: false, message: 'Error de red actualizando preferencia de pago.' };
     }
   };
 
   const loginUserWithCredentials = async (
-    email: string,
+    identifier: string,
     password: string
   ): Promise<{ ok: boolean; error?: string }> => {
-    const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail) {
-      return { ok: false, error: 'Ingresa tu correo electrónico.' };
+    const cleanIdentifier = identifier.trim().toLowerCase();
+    if (!cleanIdentifier) {
+      return { ok: false, error: 'Ingresa tu usuario o correo electrónico.' };
     }
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: cleanEmail, password })
+        body: JSON.stringify({ email: cleanIdentifier, password })
       });
       const data = (await res.json().catch(() => ({}))) as {
         token?: string;
         error?: string;
-        user?: { email: string; displayName: string; coinsBalance: number; isActive: boolean; isDemoIsolated: boolean };
+        user?: {
+          email: string;
+          username?: string;
+          displayName: string;
+          coinsBalance: number;
+          isActive: boolean;
+          isDemoIsolated: boolean;
+          preferredPayoutMethod?: 'USDT' | 'PAYPAL';
+          preferredPayoutAddress?: string;
+        };
       };
       if (!res.ok || !data.user) {
-        return { ok: false, error: data.error || 'Correo o contraseña inválidos.' };
+        return { ok: false, error: data.error || 'Usuario o contraseña incorrectos.' };
       }
       if (data.token) persistAuthToken(data.token);
       setUserEmail(data.user.email);
+      setUsername(data.user.username || '');
+      setPreferredPayoutMethod(data.user.preferredPayoutMethod === 'PAYPAL' ? 'PAYPAL' : 'USDT');
+      setPreferredPayoutAddress(data.user.preferredPayoutAddress || '');
       setIsOwnerAuthenticated(false);
       setCoins(typeof data.user.coinsBalance === 'number' ? data.user.coinsBalance : 0);
       const activeReal = Boolean(data.user.isActive && !data.user.isDemoIsolated);
@@ -963,6 +1052,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logoutUser = () => {
     const guestEmail = 'jugador_anonimo@aethervault.com';
     setUserEmail(guestEmail);
+    setUsername('');
+    setPreferredPayoutMethod('USDT');
+    setPreferredPayoutAddress('');
     setIsOwnerAuthenticated(false);
     persistAuthToken(null);
     try {
@@ -975,7 +1067,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // ignore
     });
     soundFx.playClick();
-    addNotification('Sesión Cerrada', 'Has cerrado sesión. La Bóveda del Dueño y el módulo de Banco Digital ahora están bloqueados.', 'info');
+    addNotification('Sesión Cerrada', 'Has cerrado sesión de forma segura.', 'info');
     setActiveTab('store');
   };
 
@@ -1106,61 +1198,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
-  const [firestoreSyncedBalance, setFirestoreSyncedBalance] = useState<number | null>(null);
-  const lastSeenFirestoreInvoiceRef = React.useRef<string>('');
-
-  useEffect(() => {
-    const unsubAuth = onAuthStateChanged(auth, user => {
-      setFirebaseUser(user);
-      if (!user) {
-        setFirestoreSyncedBalance(null);
-      }
-    });
-    return () => unsubAuth();
-  }, []);
-
-  useEffect(() => {
-    if (!firebaseUser || !firebaseUser.email || !firebaseUser.emailVerified) return;
-
-    void syncUserProfileToFirestore({
-      user: firebaseUser,
-      displayName: character.name,
-      level: character.level,
-      xp: character.experience
-    }).catch(() => {
-      // Structured diagnostics already logged via handleFirestoreError
-    });
-  }, [firebaseUser, character.name, character.level, character.experience]);
-
-  useEffect(() => {
-    if (!firebaseUser || !firebaseUser.email || !firebaseUser.emailVerified) return;
-    const subscribedEmail = firebaseUser.email.toLowerCase();
-
-    const unsubBal = subscribeToUserFirestoreBalance(subscribedEmail, data => {
-      if (!data) {
-        setFirestoreSyncedBalance(null);
-        return;
-      }
-      setFirestoreSyncedBalance(data.coinsBalance);
-
-      if (
-        data.lastInvoiceId &&
-        data.lastInvoiceId !== lastSeenFirestoreInvoiceRef.current &&
-        userEmail.trim().toLowerCase() === subscribedEmail &&
-        !isDemoAccount
-      ) {
-        lastSeenFirestoreInvoiceRef.current = data.lastInvoiceId;
-        if (data.coinsBalance > coins) {
-          setCoins(data.coinsBalance);
-          setHasConfirmedRealDeposit(true);
-        }
-      }
-    });
-
-    return () => unsubBal();
-  }, [firebaseUser, userEmail, isDemoAccount, coins]);
-
   useEffect(() => {
     installGlobalErrorTelemetry(() => userEmail);
   }, [userEmail]);
@@ -1273,7 +1310,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           {
             id: 'msg_4',
             senderEmail: OWNER_EMAIL,
-            senderName: 'Administrador (trabajofino52)',
+            senderName: 'Administrador de Bóveda',
             isAdmin: true,
             message: '¡Excelente! El panel de soporte está totalmente operativo. Puedes enviar tickets, modificar tu clave y diagnosticar pagos con Hash.',
             timestamp: Date.now() - 900000
@@ -1435,7 +1472,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { ok: false, message: msg };
     }
     if (!authToken) {
-      const msg = 'Conecta una cuenta autenticada (ej. tester01 o tu cuenta real) para transferir monedas.';
+      const msg = 'Conecta una cuenta autenticada para transferir monedas.';
       addNotification('Sesión Requerida', msg, 'security');
       return { ok: false, message: msg };
     }
@@ -1794,11 +1831,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [redeemableUsers, setRedeemableUsers] = useState<Array<{
     id: string;
     email: string;
+    username?: string;
     displayName: string;
     role: string;
     isActive: boolean;
     coinsBalance: number;
     maxAllowed30PctCoins: number;
+    preferredPayoutMethod?: 'USDT' | 'PAYPAL';
+    preferredPayoutAddress?: string;
   }>>([]);
 
   const refreshRedemptionsFromServer = useCallback(async () => {
@@ -1813,23 +1853,21 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         users?: Array<{
           id: string;
           email: string;
+          username?: string;
           displayName: string;
           role: string;
           isActive: boolean;
           coinsBalance: number;
           maxAllowed30PctCoins: number;
+          preferredPayoutMethod?: 'USDT' | 'PAYPAL';
+          preferredPayoutAddress?: string;
         }>;
       };
       if (data?.requests) {
-        setRedemptionRequests(prev => {
-          const syncedMap = new Map(prev.map(p => [p.id, Boolean(p.firestoreSynced)]));
-          const merged = data.requests!.map(r => ({
-            ...r,
-            awaitingAuthorization: r.awaitingAuthorization ?? r.status === 'PENDING_APPROVAL',
-            firestoreSynced: syncedMap.get(r.id) ?? r.firestoreSynced ?? false
-          }));
-          return merged;
-        });
+        setRedemptionRequests(data.requests.map(r => ({
+          ...r,
+          awaitingAuthorization: r.awaitingAuthorization ?? r.status === 'PENDING_APPROVAL'
+        })));
       }
       if (Array.isArray(data?.users)) {
         setRedeemableUsers(data.users);
@@ -1842,42 +1880,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     void refreshRedemptionsFromServer();
   }, [refreshRedemptionsFromServer]);
-
-  useEffect(() => {
-    if (!firebaseUser || !firebaseUser.email || !firebaseUser.emailVerified) return;
-    let unsub: (() => void) | undefined;
-    try {
-      unsub = subscribeToFirestoreRedemptionRequests(fsRequests => {
-        setRedemptionRequests(prev => {
-          const byId = new Map<string, PlayerRedemptionRequest>();
-          for (const item of prev) {
-            byId.set(item.id, item);
-          }
-          for (const fsItem of fsRequests) {
-            const existing = byId.get(fsItem.id);
-            if (!existing) {
-              byId.set(fsItem.id, { ...fsItem, firestoreSynced: true });
-            } else {
-              // Merge Firestore authoritative flags without dropping SQLite metadata
-              const fsResolved = fsItem.status !== 'PENDING_APPROVAL' && !fsItem.awaitingAuthorization;
-              const existingResolved = existing.status !== 'PENDING_APPROVAL' && !existing.awaitingAuthorization;
-              byId.set(fsItem.id, {
-                ...existing,
-                ...(fsResolved && !existingResolved ? fsItem : {}),
-                firestoreSynced: true
-              });
-            }
-          }
-          return Array.from(byId.values()).sort((a, b) => b.timestamp - a.timestamp);
-        });
-      });
-    } catch {
-      // ignore subscription initialization error
-    }
-    return () => {
-      if (unsub) unsub();
-    };
-  }, [firebaseUser]);
 
   useEffect(() => {
     try {
@@ -2399,39 +2401,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     netOwnerProfitUSD: Math.round(availableBalanceUSD + withdrawalFeesCollected + (houseVaultShare * 0.8))
   };
 
-  // Actions for redemptions
-  const syncRedemptionToFirestore = async (req: PlayerRedemptionRequest): Promise<boolean> => {
-    if (!firebaseUser || !firebaseUser.email || !firebaseUser.emailVerified) {
-      addNotification(
-        'Sesión Google Requerida',
-        `Conecta tu cuenta Google (${OWNER_EMAIL}) en la Bóveda para sincronizar en Firestore.`,
-        'security'
-      );
-      return false;
-    }
-    try {
-      const synced = await upsertRedemptionRequestToFirestore({ req, actorUser: firebaseUser });
-      if (synced) {
-        setRedemptionRequests(prev =>
-          prev.map(item => (item.id === req.id ? { ...item, firestoreSynced: true } : item))
-        );
-        addNotification(
-          'Sincronizado en Firestore',
-          `La solicitud #${req.id.slice(-8)} quedó registrada en Firestore con awaitingAuthorization=${req.awaitingAuthorization}.`,
-          'success'
-        );
-      }
-      return synced;
-    } catch (err) {
-      addNotification(
-        'Error al Sincronizar Firestore',
-        err instanceof Error ? err.message : 'No se pudo guardar la solicitud en Firestore.',
-        'security'
-      );
-      return false;
-    }
-  };
-
+  // Actions for redemptions (100% SQLite Authoritative)
   const validateAndCreateAdminRedemption = async (params: {
     playerEmail: string;
     playerName?: string;
@@ -2475,25 +2445,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { ok: false, message: msg };
       }
 
-      let finalReq: PlayerRedemptionRequest = {
+      const finalReq: PlayerRedemptionRequest = {
         ...data.request,
-        awaitingAuthorization: true,
-        firestoreSynced: false
+        awaitingAuthorization: true
       };
-
-      if (firebaseUser && firebaseUser.email && firebaseUser.emailVerified) {
-        try {
-          const synced = await upsertRedemptionRequestToFirestore({
-            req: finalReq,
-            actorUser: firebaseUser
-          });
-          if (synced) {
-            finalReq = { ...finalReq, firestoreSynced: true };
-          }
-        } catch {
-          // SQLite record persists authoritatively; Firestore can be synced manually if offline
-        }
-      }
 
       setRedemptionRequests(prev => [finalReq, ...prev.filter(r => r.id !== finalReq.id)]);
       await refreshRedemptionsFromServer();
@@ -2582,22 +2537,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setCoins(prev => prev - coinsToRedeem);
         }
 
-        let createdReq: PlayerRedemptionRequest = {
+        const createdReq: PlayerRedemptionRequest = {
           ...data.request,
           awaitingAuthorization: data.request.awaitingAuthorization ?? true
         };
-
-        if (firebaseUser && firebaseUser.email && firebaseUser.emailVerified) {
-          try {
-            const synced = await upsertRedemptionRequestToFirestore({
-              req: createdReq,
-              actorUser: firebaseUser
-            });
-            if (synced) createdReq = { ...createdReq, firestoreSynced: true };
-          } catch {
-            // Keep SQLite record
-          }
-        }
 
         setRedemptionRequests(prev => [createdReq, ...prev.filter(r => r.id !== createdReq.id)]);
         const tx: TransactionRecord = {
@@ -2639,7 +2582,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       timestamp: Date.now()
     });
 
-    let newReq: PlayerRedemptionRequest = {
+    const newReq: PlayerRedemptionRequest = {
       id: 'red_' + Date.now(),
       playerEmail: userEmail,
       playerName: character.name,
@@ -2656,18 +2599,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       status: 'PENDING_APPROVAL',
       awaitingAuthorization: true,
       timestamp: Date.now(),
-      txHash,
-      firestoreSynced: false
+      txHash
     };
-
-    if (firebaseUser && firebaseUser.email && firebaseUser.emailVerified) {
-      try {
-        const synced = await upsertRedemptionRequestToFirestore({ req: newReq, actorUser: firebaseUser });
-        if (synced) newReq = { ...newReq, firestoreSynced: true };
-      } catch {
-        // keep local state
-      }
-    }
 
     setCoins(prev => prev - coinsToRedeem);
     setRedemptionRequests(prev => [newReq, ...prev]);
@@ -2735,18 +2668,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
-    if (firebaseUser && firebaseUser.emailVerified && firebaseUser.email?.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
-      try {
-        await reviewRedemptionRequestInFirestore({
-          requestId,
-          decision: 'APPROVED',
-          ownerUser: firebaseUser
-        });
-      } catch {
-        // Keep SQLite authoritative even if doc wasn't synced yet
-      }
-    }
-
     setRedemptionRequests(prev =>
       prev.map(r =>
         r.id === requestId
@@ -2795,19 +2716,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       } catch {
         // fallback local update
-      }
-    }
-
-    if (firebaseUser && firebaseUser.emailVerified && firebaseUser.email?.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
-      try {
-        await reviewRedemptionRequestInFirestore({
-          requestId,
-          decision: 'REJECTED',
-          ownerUser: firebaseUser,
-          rejectionReason: reason
-        });
-      } catch {
-        // Keep SQLite authoritative
       }
     }
 
@@ -3496,7 +3404,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!authToken) {
       return {
         ok: false,
-        error: 'Conecta tu cuenta (ej. tester01 o tu usuario real) en "Seguridad / Sesión" para generar la factura en el servidor.'
+        error: 'Inicia sesión o regístrate con tu correo para generar la orden de compra en el servidor.'
       };
     }
 
@@ -3963,9 +3871,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isHistoryModalOpen,
         setIsHistoryModalOpen,
         userEmail,
+        username,
+        preferredPayoutMethod,
+        preferredPayoutAddress,
+        updatePayoutPreference,
         authToken,
-        firebaseUser,
-        firestoreSyncedBalance,
         isOwner,
         isDemoAccount,
         isRealAccountActive,
@@ -3983,6 +3893,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         authModalMode,
         setAuthModalMode,
         openAuthModal,
+        isSessionChecking,
         payoutConfig,
         gatewayAvailability,
         playerVisibility,
@@ -4027,7 +3938,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         redeemableUsers,
         refreshRedemptionsFromServer,
         validateAndCreateAdminRedemption,
-        syncRedemptionToFirestore,
         requestPlayerRedemption,
         approveRedemptionRequest,
         rejectRedemptionRequest,

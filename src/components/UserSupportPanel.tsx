@@ -606,9 +606,9 @@ export const UserSupportPanel: React.FC = () => {
                 <div className="p-3 bg-cyan-950/40 border border-cyan-500/40 rounded-xl text-xs text-cyan-200 flex items-start gap-2.5">
                   <Sparkles className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
                   <div>
-                    <strong className="text-cyan-300">Cuenta Demo Aislada (gokudemo):</strong>
+                    <strong className="text-cyan-300">Cuenta Demo Aislada:</strong>
                     <p className="text-[11px] text-slate-300 mt-0.5">
-                      Clave inicial: <code className="text-amber-300 font-mono">goku30309982</code>. Puedes modificarla para tu sesión de pruebas actual.
+                      Operas en entorno virtual de pruebas con saldo ficticio. Puedes modificar tu clave de sesión desde aquí.
                     </p>
                   </div>
                 </div>
@@ -618,7 +618,7 @@ export const UserSupportPanel: React.FC = () => {
                 <div className="p-3 bg-amber-950/40 border border-amber-500/40 rounded-xl text-xs text-amber-200 flex items-start gap-2.5">
                   <Shield className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                   <div>
-                    <strong className="text-amber-300">Cuenta Propietario (trabajofino52@gmail.com):</strong>
+                    <strong className="text-amber-300">Cuenta Propietario ({userEmail}):</strong>
                     <p className="text-[11px] text-slate-300 mt-0.5">
                       Protegida con hashing scrypt en la base de datos SQL. Se verificará tu clave actual en el servidor antes de autorizar el cambio.
                     </p>
@@ -861,7 +861,7 @@ export const UserSupportPanel: React.FC = () => {
                       <span>Política de Activación de Cuentas Reales</span>
                     </div>
                     <p className="text-[11px] text-slate-400 leading-relaxed">
-                      Como medida anti-fraude, las cuentas de juego real se activan automáticamente en el momento en que se confirma el primer depósito en la bóveda. Las cuentas demo (como <code className="text-cyan-300">gokudemo</code>) operan en un entorno aislado con $5,000 USD virtuales.
+                      Como medida anti-fraude, las cuentas de juego real se activan automáticamente en el momento en que se confirma el primer depósito en la bóveda. Las cuentas de demostración operan en un entorno aislado.
                     </p>
                     <div className="pt-1 flex items-center gap-2">
                       <span className="text-[10px] text-slate-400">Estado de tu cuenta:</span>
@@ -919,10 +919,10 @@ export const UserSupportPanel: React.FC = () => {
                 <div className="p-4 bg-slate-950/60 border border-slate-800 rounded-xl space-y-1.5">
                   <h4 className="text-xs font-bold text-amber-300 flex items-center gap-2">
                     <ChevronRight className="w-3.5 h-3.5 text-amber-400" />
-                    ¿Cómo funciona la cuenta demo 'gokudemo'?
+                    ¿Cómo funcionan los depósitos y acreditaciones?
                   </h4>
                   <p className="text-xs text-slate-300 leading-relaxed pl-5">
-                    La cuenta demo permite probar todos los 50 juegos y funciones con un saldo precargado de <strong>$5,000 USD (6,250 monedas)</strong>. Está totalmente aislada de las cuentas de dinero real, y puedes restablecer los $5,000 USD en cualquier momento con un solo clic.
+                    Cada depósito confirmado por PayPal, tarjeta o red USDT acredita tus monedas en la bóveda inmediatamente para jugar en todas las mesas disponibles.
                   </p>
                 </div>
 
@@ -932,7 +932,7 @@ export const UserSupportPanel: React.FC = () => {
                     ¿Qué hago si mi depósito tarda más de lo previsto?
                   </h4>
                   <p className="text-xs text-slate-300 leading-relaxed pl-5">
-                    Ve a la pestaña <strong>"Resolución de Pagos"</strong> en este mismo panel, pega el TXID o número de transacción y presiona "Diagnosticar y Acreditar Pago". Si el sistema requiere intervención manual, abre un ticket y el Administrador (<code className="text-slate-300">trabajofino52@gmail.com</code>) lo acreditará inmediatamente.
+                    Ve a la pestaña <strong>"Resolución de Pagos"</strong> en este mismo panel, pega el TXID o número de transacción y presiona "Diagnosticar y Acreditar Pago". Si el sistema requiere intervención manual, abre un ticket y el equipo Administrador lo acreditará de inmediato.
                   </p>
                 </div>
               </div>

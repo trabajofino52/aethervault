@@ -381,22 +381,19 @@ export function buildDeterministicVaultRecommendations(params: {
       : 'Al levantar BTCPay en tu VPS, pega el Store ID y API Key en Claves API & Tarjetas.'
   });
 
-  // Rule 2: Firestore Cross-Device Sync Status
+  // Rule 2: Authoritative SQLite Local WAL Persistence
   recs.push({
     id: 'rec_firestore_sync',
     category: 'DATABASE',
-    status: isFirestoreConnected && webhookPendingSyncCount === 0 ? 'OPTIMAL' : 'ACTION_REQUIRED',
-    title: 'Sincronización Multidispositivo en Firestore + Respaldo SQLite/PostgreSQL',
-    ruleTrigger: !isFirestoreConnected
-      ? 'Regla disparada: Sesión Google de administrador desconectada en este navegador.'
-      : webhookPendingSyncCount > 0
-      ? `Regla disparada: ${webhookPendingSyncCount} webhook(s) confirmados pendientes de reflejarse en Firestore.`
-      : 'Regla cumplida: Firestore conectado y 0 webhooks pendientes de sincronización.',
+    status: webhookPendingSyncCount === 0 ? 'OPTIMAL' : 'RECOMMENDED',
+    title: 'Base de Datos SQLite WAL Activa (data/aethervault.db)',
+    ruleTrigger:
+      webhookPendingSyncCount > 0
+        ? `Hay ${webhookPendingSyncCount} webhook(s) pendientes de confirmación final en blockchain.`
+        : 'Regla cumplida: Base de datos SQLite WAL activa con cifrado AES-256-GCM y liquidación atómica.',
     recommendation:
-      'Mantén conectada tu sesión Google (trabajofino52@gmail.com) para que cada confirmación on-chain de BTCPay dispare la transacción atómica hacia user_balances y los jugadores vean su saldo actualizado entre dispositivos.',
-    actionHint: isFirestoreConnected
-      ? 'Sincronización automática activa.'
-      : 'Haz clic en "Conectar Google / Firestore" para habilitar escritura atómica.'
+      'Todos los usuarios, preferencias de cobro (USDT o PayPal), depósitos, retiros al 30%, transferencias P2P y auditoría SHA-256 persisten directamente en SQLite sin depender de servicios externos en la nube.',
+    actionHint: 'Realiza respaldos periódicos de la carpeta data/aethervault.db en tu servidor.'
   });
 
   // Rule 3: Anti-Freeze Settlement Rail (No Binance Personal / No PayPal Personal)
@@ -442,7 +439,7 @@ export function buildDeterministicVaultRecommendations(params: {
     category: 'SECURITY',
     status: 'OPTIMAL',
     title: 'Tope Estricto del 30% en Retiros + Autorización Única del Propietario',
-    ruleTrigger: 'Regla forzada en Frontend, Express API, SQLite WAL, Firestore Rules y Triggers PostgreSQL.',
+    ruleTrigger: 'Regla forzada en Frontend, Express API y transacciones atómicas SQLite WAL.',
     recommendation:
       'Ningún cliente puede solicitar más del 30% de su saldo disponible ni auto-aprobar canjes; cada retiro queda en PENDING_APPROVAL hasta tu revisión manual como trabajofino52@gmail.com.',
     actionHint: 'Revisa solicitudes pendientes desde la pestaña Autorización de Canjes.'
@@ -454,10 +451,10 @@ export function buildDeterministicVaultRecommendations(params: {
     category: 'SECURITY',
     status: 'RECOMMENDED',
     title: 'Clave Larga Unificada en VM + Rotación Pre-VPS Público',
-    ruleTrigger: 'Todas las llaves VM (OWNER_MASTER_KEY, DB_ENCRYPTION_KEY, SESSION_SECRET, BTCPAY_WEBHOOK_SECRET, PostgreSQL Local) comparten tu clave larga.',
+    ruleTrigger: 'Todas las llaves locales (OWNER_MASTER_KEY, DB_ENCRYPTION_KEY, SESSION_SECRET, BTCPAY_WEBHOOK_SECRET, NOWPAYMENTS_IPN_SECRET) operan sincronizadas.',
     recommendation:
-      'En el entorno local/VM resulta ideal usar la misma clave larga en todos los módulos y scripts. Al desplegar en tu VPS Debian 13 público con --vps-prod, el instalador generará secretos aleatorios de 256 bits distintos por servicio.',
-    actionHint: 'Revisa también firestore.rules en Firebase Console antes de abrir tráfico masivo externo.'
+      'En el entorno local/ngrok resulta ideal mantener la clave unificada en todos los módulos. Al pasar a un servidor público definitivo, configura variables separadas en tu archivo .env.',
+    actionHint: 'Conserva tus secretos exclusivamente en .env en producción.'
   });
 
   return recs;
