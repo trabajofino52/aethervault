@@ -80,8 +80,7 @@ const StoreHeroHome: React.FC = () => {
   const showHeroTab = isOwner || playerVisibility.showCharacterHero;
   const showNeobank = isOwner || playerVisibility.showNeobankCard;
   const showCatalog = isOwner || playerVisibility.showStoreCatalog;
-  const showTop50 = isOwner || playerVisibility.showTop50Casino;
-
+  const showTop50 = false;
   return (
     <div className="space-y-12 pb-16">
       
