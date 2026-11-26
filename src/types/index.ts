@@ -70,6 +70,50 @@ export interface PlayerRedemptionRequest {
   reviewedAt?: number;
   rejectionReason?: string;
   txHash: string;
+<<<<<<< HEAD
+=======
+  payoutStatus?: string;
+  externalPayoutId?: string;
+  firestoreSynced?: boolean;
+}
+
+export interface EconomyConfig {
+  vaultRetentionPct: number;
+  redemptionFeePct: number;
+  transferFeePct: number;
+  maxWithdrawalRatioPct: number;
+  updatedAt: number;
+  updatedBy: string;
+}
+
+export interface DirectoryPlayer {
+  id: string;
+  email: string;
+  username?: string;
+  displayName: string;
+  role: 'OWNER' | 'PLAYER' | 'DEMO';
+  isActive: boolean;
+  coinsBalance: number;
+  lastLoginAt: number;
+  preferredPayoutMethod?: 'USDT' | 'PAYPAL';
+  preferredPayoutAddress?: string;
+}
+
+export interface CoinTransferRecord {
+  id: string;
+  senderEmail: string;
+  senderName: string;
+  recipientEmail: string;
+  recipientName: string;
+  grossCoins: number;
+  feeCoins: number;
+  netCoins: number;
+  feePct: number;
+  usdEquivalent: number;
+  note: string;
+  txHash: string;
+  createdAt: number;
+>>>>>>> aee208e764f5c21e8d81af2bcb20a3ef43c4803e
 }
 
 export interface ServerResourceMetrics {

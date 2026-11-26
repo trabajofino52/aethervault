@@ -87,7 +87,6 @@ export const AdminPanel: React.FC = () => {
     redeemableUsers,
     refreshRedemptionsFromServer,
     validateAndCreateAdminRedemption,
-    syncRedemptionToFirestore,
     approveRedemptionRequest,
     rejectRedemptionRequest,
     vaultEconomics,
@@ -104,7 +103,6 @@ export const AdminPanel: React.FC = () => {
     offlinePlayersCount,
     userEmail,
     authToken,
-    firebaseUser,
     loginOwnerWithKey,
     isOwner,
     coins,
@@ -634,9 +632,34 @@ export const AdminPanel: React.FC = () => {
   useEffect(() => {
     if (!wdPlayerEmail && redeemableUsers.length > 0) {
       const preferred = redeemableUsers.find(u => u.isActive && u.coinsBalance > 0) || redeemableUsers[0];
-      if (preferred) setWdPlayerEmail(preferred.email);
+      if (preferred) {
+        setWdPlayerEmail(preferred.email);
+        if (preferred.preferredPayoutMethod === 'PAYPAL') {
+          setWdDestType('paypal');
+        } else if (preferred.preferredPayoutMethod === 'USDT') {
+          setWdDestType('crypto_usdt');
+        }
+        if (preferred.preferredPayoutAddress) {
+          setWdDestAddress(preferred.preferredPayoutAddress);
+        }
+      }
     }
   }, [redeemableUsers, wdPlayerEmail]);
+
+  const handleSelectRedeemableUser = (emailVal: string) => {
+    setWdPlayerEmail(emailVal);
+    const matched = redeemableUsers.find(u => u.email.toLowerCase() === emailVal.trim().toLowerCase());
+    if (matched) {
+      if (matched.preferredPayoutMethod === 'PAYPAL') {
+        setWdDestType('paypal');
+      } else {
+        setWdDestType('crypto_usdt');
+      }
+      if (matched.preferredPayoutAddress) {
+        setWdDestAddress(matched.preferredPayoutAddress);
+      }
+    }
+  };
 
   const pendingRedemptionsCount = redemptionRequests.filter(
     r => r.status === 'PENDING_APPROVAL' || r.awaitingAuthorization
@@ -1726,10 +1749,6 @@ export const AdminPanel: React.FC = () => {
           return true;
         });
 
-        const isGoogleOwnerConnected =
-          Boolean(firebaseUser?.emailVerified) &&
-          firebaseUser?.email?.toLowerCase() === OWNER_EMAIL.toLowerCase();
-
         return (
           <div className="space-y-6">
             {/* Motor de Validación Automática 30% + Creación en Espera de Autorización */}
@@ -1744,16 +1763,8 @@ export const AdminPanel: React.FC = () => {
                     <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
                       Tope Auto 30% Activo
                     </span>
-                    <span
-                      className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${
-                        isGoogleOwnerConnected
-                          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                          : 'bg-slate-800 text-slate-300 border-slate-700'
-                      }`}
-                    >
-                      {isGoogleOwnerConnected
-                        ? 'SQLite + Firestore Sincronizado'
-                        : 'SQLite Activo (Conecta Google en Bóveda para Firestore)'}
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border bg-emerald-500/15 text-emerald-300 border-emerald-500/30">
+                      SQLite WAL (data/aethervault.db)
                     </span>
                   </div>
                   <p className="text-xs text-slate-400 mt-1 max-w-3xl leading-relaxed">
@@ -1782,12 +1793,14 @@ export const AdminPanel: React.FC = () => {
                   {redeemableUsers.length > 0 ? (
                     <select
                       value={wdPlayerEmail}
-                      onChange={e => setWdPlayerEmail(e.target.value)}
+                      onChange={e => handleSelectRedeemableUser(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-amber-400"
                     >
                       {redeemableUsers.map(u => (
                         <option key={u.id} value={u.email}>
-                          {u.email} ({u.role}) — Balance: {u.coinsBalance.toLocaleString()} mo | Máx 30%: {u.maxAllowed30PctCoins.toLocaleString()} mo {!u.isActive ? '[INACTIVO]' : ''}
+                          {u.username ? `@${u.username} (` : ''}
+                          {u.email}
+                          {u.username ? ')' : ''} — Balance: {u.coinsBalance.toLocaleString()} mo | Máx 30%: {u.maxAllowed30PctCoins.toLocaleString()} mo [Cobro: {u.preferredPayoutMethod || 'USDT'}] {!u.isActive ? '[INACTIVO]' : ''}
                         </option>
                       ))}
                     </select>
@@ -1907,6 +1920,13 @@ export const AdminPanel: React.FC = () => {
                     <div className="text-[11px] text-slate-400 font-mono-numbers">
                       Balance Total: {previewBalance.toLocaleString()} mo · Límite 30%: {previewMax30.toLocaleString()} mo · Neto 80% estimado: $
                       {(previewFinalCoins * 0.8 * (1 - redemptionFeeRate / 100)).toFixed(2)} USD
+                      {selectedUser.preferredPayoutMethod && (
+                        <>
+                          {' '}
+                          · Método preferido: <strong className="text-emerald-300">{selectedUser.preferredPayoutMethod}</strong>
+                          {selectedUser.preferredPayoutAddress ? ` (${selectedUser.preferredPayoutAddress})` : ''}
+                        </>
+                      )}
                     </div>
                   </div>
                   <span className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-700 text-[10px] font-bold uppercase tracking-wider text-cyan-300 shrink-0">
@@ -2030,23 +2050,9 @@ export const AdminPanel: React.FC = () => {
                                 {new Date(req.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} -{' '}
                                 {new Date(req.timestamp).toLocaleDateString()}
                               </div>
-                              {req.firestoreSynced ? (
-                                <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                                  Firestore OK
-                                </span>
-                              ) : isAwaiting && isGoogleOwnerConnected ? (
-                                <button
-                                  type="button"
-                                  onClick={() => void syncRedemptionToFirestore(req)}
-                                  className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30"
-                                >
-                                  Subir a Firestore
-                                </button>
-                              ) : (
-                                <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-800 text-slate-400">
-                                  SQLite Local
-                                </span>
-                              )}
+                              <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                                SQLite WAL
+                              </span>
                             </td>
 
                             <td className="py-3 px-3">

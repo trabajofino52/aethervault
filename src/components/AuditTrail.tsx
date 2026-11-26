@@ -14,7 +14,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   XCircle,
-  CloudUpload,
   Filter,
   X,
   Eye,
@@ -22,10 +21,6 @@ import {
 } from 'lucide-react';
 import { useGame, OWNER_EMAIL } from '../context/GameContext';
 import { AuditTrailCategory, AuditTrailEntry, AuditTrailPageResponse } from '../types';
-import {
-  syncAuditTrailBatchToFirestore,
-  subscribeToFirestoreAuditTrail
-} from '../services/firestoreVaultService';
 import { soundFx } from '../utils/audio';
 
 type CategoryFilter = 'ALL' | AuditTrailCategory;
@@ -67,7 +62,7 @@ const SEVERITY_META: Record<
 };
 
 export const AuditTrail: React.FC = () => {
-  const { authToken, isOwner, firebaseUser, loginOwnerWithKey, addNotification } = useGame();
+  const { authToken, isOwner, loginOwnerWithKey, addNotification } = useGame();
 
   // Filter & Pagination state
   const [category, setCategory] = useState<CategoryFilter>('ALL');
@@ -85,19 +80,13 @@ export const AuditTrail: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<AuditTrailEntry | null>(null);
 
-  // Integrity & Firestore sync state
+  // Integrity state
   const [isVerifyingChain, setIsVerifyingChain] = useState<boolean>(false);
-  const [isSyncingFirestore, setIsSyncingFirestore] = useState<boolean>(false);
-  const [firestoreEntryIds, setFirestoreEntryIds] = useState<Set<string>>(new Set());
 
   // Fallback owner key unlock
   const [masterKeyInput, setMasterKeyInput] = useState<string>('');
   const [isUnlocking, setIsUnlocking] = useState<boolean>(false);
   const [unlockError, setUnlockError] = useState<string | null>(null);
-
-  const isVerifiedAdminGoogle = Boolean(
-    firebaseUser?.emailVerified && firebaseUser.email?.toLowerCase() === OWNER_EMAIL.toLowerCase()
-  );
 
   // Debounce search text
   useEffect(() => {
@@ -107,15 +96,6 @@ export const AuditTrail: React.FC = () => {
     }, 280);
     return () => window.clearTimeout(timer);
   }, [searchInput]);
-
-  // Subscribe to Firestore mirrored /audit_trail IDs when verified admin Google is signed in
-  useEffect(() => {
-    if (!isVerifiedAdminGoogle) return;
-    const unsubscribe = subscribeToFirestoreAuditTrail(ids => {
-      setFirestoreEntryIds(ids);
-    });
-    return () => unsubscribe();
-  }, [isVerifiedAdminGoogle]);
 
   const dateFromMs = useMemo(() => {
     if (!dateFromStr) return undefined;
@@ -197,33 +177,6 @@ export const AuditTrail: React.FC = () => {
       addNotification('Error de Red', 'No se pudo contactar /api/admin/verify-integrity.', 'security');
     } finally {
       setIsVerifyingChain(false);
-    }
-  };
-
-  const handleSyncToFirestore = async () => {
-    if (!isVerifiedAdminGoogle || !firebaseUser || !data || data.items.length === 0) return;
-    setIsSyncingFirestore(true);
-    try {
-      const syncedCount = await syncAuditTrailBatchToFirestore({
-        entries: data.items,
-        ownerUser: firebaseUser
-      });
-      soundFx.playCoinChime();
-      addNotification(
-        'Auditoría Respaldada en Firestore',
-        syncedCount > 0
-          ? `Se replicaron ${syncedCount} eventos inmutables en la colección /audit_trail.`
-          : 'Todos los eventos visibles en esta página ya estaban respaldados en Firestore.',
-        'success'
-      );
-    } catch (err) {
-      addNotification(
-        'Error al Sincronizar',
-        err instanceof Error ? err.message : 'No se pudo respaldar la página actual en Firestore.',
-        'security'
-      );
-    } finally {
-      setIsSyncingFirestore(false);
     }
   };
 
@@ -406,21 +359,6 @@ export const AuditTrail: React.FC = () => {
             >
               <Lock className="w-3.5 h-3.5" />
               <span>{isVerifyingChain ? 'Verificando...' : 'Verificar SHA-256'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => void handleSyncToFirestore()}
-              disabled={!isVerifiedAdminGoogle || isSyncingFirestore || !data || data.items.length === 0}
-              title={
-                isVerifiedAdminGoogle
-                  ? 'Respaldar eventos visibles en /audit_trail de Firestore'
-                  : 'Conecta tu cuenta Google verificada en VaultConfigPanel para respaldar en Firestore'
-              }
-              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 transition-colors disabled:opacity-40"
-            >
-              <CloudUpload className="w-3.5 h-3.5" />
-              <span>{isSyncingFirestore ? 'Respaldando...' : 'Respaldar Firestore'}</span>
             </button>
 
             <button
@@ -700,8 +638,6 @@ export const AuditTrail: React.FC = () => {
                   const sevMeta = SEVERITY_META[entry.severity];
                   const CatIcon = catMeta.icon;
                   const SevIcon = sevMeta.icon;
-                  const cleanDocId = entry.id.replace(/[^a-zA-Z0-9_\-]/g, '_').slice(0, 128);
-                  const isSynced = firestoreEntryIds.has(cleanDocId);
                   const isSelected = selectedEntry?.id === entry.id;
 
                   return (
@@ -749,11 +685,6 @@ export const AuditTrail: React.FC = () => {
                       <td className="py-3 px-3 text-right whitespace-nowrap">
                         <div className="inline-flex items-center gap-1.5 font-mono tabular-nums text-[11px] text-slate-400">
                           <span>{entry.row_hash.slice(0, 12)}…</span>
-                          {isSynced && (
-                            <span title="Respaldado en Firestore">
-                              <CloudUpload className="w-3 h-3 text-emerald-400" />
-                            </span>
-                          )}
                           <Eye className="w-3.5 h-3.5 text-slate-500" />
                         </div>
                       </td>

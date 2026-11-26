@@ -1,13 +1,7 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useGame, OWNER_EMAIL } from '../context/GameContext';
 import { soundFx } from '../utils/audio';
-import {
-  signInWithGoogleForFirestore,
-  syncVaultConfigMetadataToFirestore,
-  processBtcpayWebhookInFirestore,
-  subscribeToFirestoreBtcpayWebhooks,
-  buildDeterministicVaultRecommendations
-} from '../services/firestoreVaultService';
+import { buildDeterministicVaultRecommendations } from '../services/firestoreVaultService';
 import {
   BtcpayWebhookEventRecord,
   CardGatewayProvider,
@@ -21,8 +15,6 @@ import {
   Building2,
   CheckCircle2,
   ClipboardCheck,
-  Cloud,
-  CloudOff,
   Coins,
   Copy,
   CreditCard,
@@ -46,8 +38,6 @@ export const VaultConfigPanel: React.FC = () => {
     isOwner,
     userEmail,
     authToken,
-    firebaseUser,
-    firestoreSyncedBalance,
     loginOwnerWithKey,
     payoutConfig,
     updatePayoutConfig,
@@ -136,21 +126,9 @@ export const VaultConfigPanel: React.FC = () => {
   const [isSavingWithdrawAccounts, setIsSavingWithdrawAccounts] = useState(false);
   const [withdrawAccountsSaved, setWithdrawAccountsSaved] = useState(false);
 
-  // --- BTCPay Server Webhooks -> Firestore Atomic Sync State ---
+  // --- BTCPay Server Webhooks -> SQLite WAL Atomic Sync State ---
   const [webhookEvents, setWebhookEvents] = useState<BtcpayWebhookEventRecord[]>([]);
-  const [firestoreWebhooks, setFirestoreWebhooks] = useState<
-    Array<{
-      eventId: string;
-      invoiceId: string;
-      eventType: string;
-      userEmail: string;
-      coinsCredited: number;
-      amountUSD: number;
-      status: string;
-    }>
-  >([]);
   const [isLoadingWebhooks, setIsLoadingWebhooks] = useState(false);
-  const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
   const [isSimulatingWebhook, setIsSimulatingWebhook] = useState(false);
   const [copiedWebhookUrl, setCopiedWebhookUrl] = useState(false);
   const [simEmail, setSimEmail] = useState('tester01@vm.aethervault.local');
@@ -160,11 +138,6 @@ export const VaultConfigPanel: React.FC = () => {
   const [simFeedback, setSimFeedback] = useState<{ ok: boolean; message: string } | null>(null);
   const [isApplyingRecs, setIsApplyingRecs] = useState(false);
   const [recFeedback, setRecFeedback] = useState<{ ok: boolean; message: string } | null>(null);
-  const syncingEventIdsRef = useRef<Set<string>>(new Set());
-
-  const isVerifiedAdminGoogle = Boolean(
-    firebaseUser?.emailVerified && firebaseUser.email?.toLowerCase() === OWNER_EMAIL.toLowerCase()
-  );
 
   // Sync local withdrawal form when global payoutConfig updates from server
   useEffect(() => {
@@ -233,103 +206,6 @@ export const VaultConfigPanel: React.FC = () => {
     }
   }, [isOwner, authToken, fetchVaultApis, fetchBtcpayWebhooks]);
 
-  useEffect(() => {
-    if (!isVerifiedAdminGoogle) {
-      setFirestoreWebhooks([]);
-      return;
-    }
-    const unsub = subscribeToFirestoreBtcpayWebhooks(events => {
-      setFirestoreWebhooks(events);
-    });
-    return () => unsub();
-  }, [isVerifiedAdminGoogle]);
-
-  const syncSingleWebhookToFirestore = useCallback(
-    async (ev: BtcpayWebhookEventRecord) => {
-      if (!isVerifiedAdminGoogle || !firebaseUser || !authToken) return;
-      if (syncingEventIdsRef.current.has(ev.id)) return;
-      syncingEventIdsRef.current.add(ev.id);
-
-      try {
-        const txResult = await processBtcpayWebhookInFirestore({
-          event: ev,
-          ownerUser: firebaseUser
-        });
-
-        await fetch(`/api/admin/btcpay/webhooks/${encodeURIComponent(ev.id)}/ack-firestore`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${authToken}` }
-        });
-
-        setWebhookEvents(prev =>
-          prev.map(item =>
-            item.id === ev.id
-              ? { ...item, firestoreSynced: true, firestoreSyncedAt: Date.now() }
-              : item
-          )
-        );
-
-        if (!txResult.alreadyProcessed && ev.coinsCredited > 0) {
-          addNotification(
-            'Firestore Actualizado por Webhook BTCPay',
-            `Confirmación blockchain reflejada en Firestore para ${ev.userEmail}: +${ev.coinsCredited} monedas (Saldo Firestore: ${txResult.newCoinsBalance}).`,
-            'success',
-            ev.coinsCredited
-          );
-        }
-      } catch (err) {
-        setSimFeedback({
-          ok: false,
-          message: `Error sincronizando webhook ${ev.invoiceId} en Firestore: ${
-            err instanceof Error ? err.message : 'verifica permisos de Google Admin'
-          }`
-        });
-      } finally {
-        syncingEventIdsRef.current.delete(ev.id);
-      }
-    },
-    [isVerifiedAdminGoogle, firebaseUser, authToken, addNotification]
-  );
-
-  // Automatically process confirmed BTCPay webhooks into Firestore once Google Owner session is connected
-  useEffect(() => {
-    if (!isVerifiedAdminGoogle || !firebaseUser || !authToken) return;
-    const pending = webhookEvents.filter(e => e.blockchainConfirmed && !e.firestoreSynced);
-    if (pending.length === 0) return;
-
-    for (const ev of pending) {
-      void syncSingleWebhookToFirestore(ev);
-    }
-  }, [isVerifiedAdminGoogle, firebaseUser, authToken, webhookEvents, syncSingleWebhookToFirestore]);
-
-  const handleConnectGoogleFirestore = async () => {
-    setIsConnectingGoogle(true);
-    setSimFeedback(null);
-    try {
-      const user = await signInWithGoogleForFirestore();
-      if (user.email?.toLowerCase() !== OWNER_EMAIL.toLowerCase()) {
-        setSimFeedback({
-          ok: false,
-          message: `Iniciaste sesión como ${user.email}. Solo ${OWNER_EMAIL} tiene permisos de escritura administrativa en Firestore.`
-        });
-      } else {
-        soundFx.playBiometricSuccess();
-        setSimFeedback({
-          ok: true,
-          message: `Google Firestore conectado como ${user.email}. Sincronización multidispositivo y webhooks blockchain activos.`
-        });
-        void syncVaultConfigMetadataToFirestore({ ownerUser: user, vaultApis }).catch(() => {});
-      }
-    } catch (err) {
-      setSimFeedback({
-        ok: false,
-        message: `No se pudo completar el acceso Google: ${err instanceof Error ? err.message : 'cancelado'}`
-      });
-    } finally {
-      setIsConnectingGoogle(false);
-    }
-  };
-
   const handleSimulateBtcpayWebhook = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!authToken) return;
@@ -396,12 +272,6 @@ export const VaultConfigPanel: React.FC = () => {
         if (data.apis?.config) setVaultApis(data.apis.config);
         if (data.apis?.configuredFlags) setVaultApiFlags(data.apis.configuredFlags);
         await refreshPayoutConfigFromServer();
-        if (isVerifiedAdminGoogle && firebaseUser) {
-          void syncVaultConfigMetadataToFirestore({
-            ownerUser: firebaseUser,
-            vaultApis: data.apis?.config || vaultApis
-          }).catch(() => {});
-        }
         soundFx.playBiometricSuccess();
         setRecFeedback({
           ok: true,
@@ -448,12 +318,6 @@ export const VaultConfigPanel: React.FC = () => {
         if (data.config) setVaultApis(data.config);
         if (data.configuredFlags) setVaultApiFlags(data.configuredFlags);
         await refreshPayoutConfigFromServer();
-        if (isVerifiedAdminGoogle && firebaseUser) {
-          void syncVaultConfigMetadataToFirestore({
-            ownerUser: firebaseUser,
-            vaultApis: data.config || vaultApis
-          }).catch(() => {});
-        }
         soundFx.playBiometricSuccess();
         setVaultFeedback({
           ok: true,
@@ -570,23 +434,17 @@ export const VaultConfigPanel: React.FC = () => {
               </span>
               <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 flex items-center gap-1">
                 <Database className="w-3 h-3" />
-                SQLite + PostgreSQL + Firestore
+                SQLite WAL (data/aethervault.db)
               </span>
-              <span
-                className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border flex items-center gap-1 ${
-                  isVerifiedAdminGoogle
-                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
-                    : 'bg-slate-800 text-slate-400 border-slate-700'
-                }`}
-              >
-                {isVerifiedAdminGoogle ? <Cloud className="w-3 h-3" /> : <CloudOff className="w-3 h-3" />}
-                {isVerifiedAdminGoogle ? 'Firestore Sync Activo' : 'Firestore Pendiente Auth'}
+              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border flex items-center gap-1 bg-emerald-500/15 text-emerald-300 border-emerald-500/40">
+                <ShieldCheck className="w-3 h-3" />
+                Persistencia Local Activa
               </span>
             </div>
             <p className="text-xs text-slate-400 max-w-3xl leading-relaxed">
-              Panel exclusivo para <strong className="text-amber-300">{OWNER_EMAIL}</strong>. Administra de forma cifrada las claves API de{' '}
-              <strong>BTCPay Server</strong>, webhooks de confirmación blockchain hacia <strong>Firestore</strong>,{' '}
-              <strong>NOWPayments</strong>, <strong>CoinGate</strong>, cuentas <strong>USDT / BTC / PayPal / IBAN</strong> y reglas fijas sin IA.
+              Panel exclusivo para <strong className="text-amber-300">{OWNER_EMAIL}</strong>. Administra de forma cifrada en <strong>SQLite</strong> las claves API de{' '}
+              <strong>BTCPay Server</strong>, webhooks de confirmación blockchain,{' '}
+              <strong>NOWPayments</strong>, <strong>CoinGate</strong>, <strong>PayPal</strong>, cuentas <strong>USDT / BTC / PayPal / IBAN</strong> y reglas fijas sin IA.
             </p>
           </div>
 
@@ -625,12 +483,7 @@ export const VaultConfigPanel: React.FC = () => {
               }`}
             >
               <Webhook className="w-3.5 h-3.5" />
-              <span>Webhooks BTCPay → Firestore</span>
-              {webhookEvents.some(e => e.blockchainConfirmed && !e.firestoreSynced) && (
-                <span className="px-1.5 py-0.2 rounded bg-rose-500 text-white text-[10px]">
-                  {webhookEvents.filter(e => e.blockchainConfirmed && !e.firestoreSynced).length}
-                </span>
-              )}
+              <span>Webhooks BTCPay → SQLite</span>
             </button>
             <button
               type="button"
@@ -1698,7 +1551,7 @@ export const VaultConfigPanel: React.FC = () => {
             </div>
           </form>
         ) : vaultSection === 'webhooks_firestore' ? (
-          /* SECTION C: BTCPAY SERVER WEBHOOK HANDLER & FIRESTORE CROSS-DEVICE SYNC */
+          /* SECTION C: BTCPAY SERVER WEBHOOK HANDLER & SQLITE WAL ATOMIC SYNC */
           <div className="space-y-6">
             <div className="p-5 rounded-2xl bg-slate-950/90 border border-cyan-500/35 space-y-4">
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -1708,31 +1561,16 @@ export const VaultConfigPanel: React.FC = () => {
                     Endpoint Receptor de Webhooks BTCPay Server (HMAC-SHA256 BTCPay-Sig)
                   </h3>
                   <p className="text-xs text-slate-400 max-w-2xl">
-                    Configura esta URL en tu BTCPay Server (Debian 13) para procesar los eventos{' '}
+                    Configura esta URL en tu BTCPay Server para procesar los eventos{' '}
                     <code className="text-emerald-300">InvoiceSettled</code> e{' '}
-                    <code className="text-emerald-300">InvoicePaymentSettled</code> tras confirmación en la cadena de bloques y reflejar los saldos automáticamente en Firestore multidispositivo.
+                    <code className="text-emerald-300">InvoicePaymentSettled</code> tras confirmación en la cadena de bloques y acreditar los saldos automáticamente en <strong>SQLite WAL</strong>.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={handleConnectGoogleFirestore}
-                    disabled={isConnectingGoogle}
-                    className={`px-4 py-2 rounded-xl text-xs font-black border flex items-center gap-1.5 transition ${
-                      isVerifiedAdminGoogle
-                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
-                        : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 border-cyan-400 shadow'
-                    }`}
-                  >
-                    {isVerifiedAdminGoogle ? <Cloud className="w-3.5 h-3.5" /> : <CloudOff className="w-3.5 h-3.5" />}
-                    <span>
-                      {isConnectingGoogle
-                        ? 'Conectando Google...'
-                        : isVerifiedAdminGoogle
-                        ? `Google Conectado (${firebaseUser?.email})`
-                        : 'Conectar Google / Firestore'}
-                    </span>
-                  </button>
+                  <span className="px-3 py-2 rounded-xl text-xs font-black border bg-emerald-500/15 text-emerald-300 border-emerald-500/40 flex items-center gap-1.5">
+                    <Database className="w-3.5 h-3.5" />
+                    <span>SQLite WAL Sincronizado</span>
+                  </span>
                   <button
                     type="button"
                     onClick={fetchBtcpayWebhooks}
@@ -1773,13 +1611,6 @@ export const VaultConfigPanel: React.FC = () => {
                 </button>
               </div>
 
-              {firestoreSyncedBalance !== null && (
-                <div className="p-2.5 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-[11px] text-emerald-300 flex items-center justify-between">
-                  <span>Saldo sincronizado en Firestore para tu sesión Google actual:</span>
-                  <strong className="font-mono text-sm">{firestoreSyncedBalance.toLocaleString()} monedas</strong>
-                </div>
-              )}
-
               {simFeedback && (
                 <div
                   className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
@@ -1794,7 +1625,7 @@ export const VaultConfigPanel: React.FC = () => {
               )}
             </div>
 
-            {/* Signed Webhook Simulator for VM / Pre-VPS Testing */}
+            {/* Signed Webhook Simulator for Local / Pre-VPS Testing */}
             <form
               onSubmit={handleSimulateBtcpayWebhook}
               className="p-5 rounded-2xl bg-slate-950/80 border border-amber-500/30 space-y-4 text-xs"
@@ -1802,7 +1633,7 @@ export const VaultConfigPanel: React.FC = () => {
               <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
                 <h4 className="font-bold text-amber-300 flex items-center gap-2">
                   <Play className="w-4 h-4" />
-                  Simulador de Webhook BTCPay Firmado (HMAC-SHA256 → SQLite → Transacción Firestore)
+                  Simulador de Webhook BTCPay Firmado (HMAC-SHA256 → SQLite WAL)
                 </h4>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-900 text-slate-300 border border-slate-700">
                   Idempotente por deliveryId
@@ -1811,12 +1642,12 @@ export const VaultConfigPanel: React.FC = () => {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <div className="space-y-1">
-                  <label className="text-slate-300 font-medium">Correo del Jugador / Tester VM</label>
+                  <label className="text-slate-300 font-medium">Correo del Jugador / Tester</label>
                   <input
                     type="text"
                     value={simEmail}
                     onChange={e => setSimEmail(e.target.value)}
-                    placeholder="tester01@vm.aethervault.local"
+                    placeholder="jugador@correo.com"
                     className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-100 font-mono"
                   />
                 </div>
@@ -1868,117 +1699,63 @@ export const VaultConfigPanel: React.FC = () => {
                 >
                   <Zap className="w-3.5 h-3.5" />
                   <span>
-                    {isSimulatingWebhook ? 'Procesando Webhook...' : 'Disparar Webhook Firmado y Sincronizar'}
+                    {isSimulatingWebhook ? 'Procesando Webhook...' : 'Disparar Webhook Firmado y Acreditar'}
                   </span>
                 </button>
               </div>
             </form>
 
-            {/* Backend Webhook Queue + Firestore Transaction Ledger */}
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
-                    Cola de Webhooks Recibidos (Backend + HMAC)
-                  </h4>
-                  <span className="text-[11px] font-mono text-slate-400">{webhookEvents.length} eventos</span>
-                </div>
-                {webhookEvents.length === 0 ? (
-                  <p className="text-xs text-slate-500 py-6 text-center">
-                    No hay webhooks recibidos aún. Dispara una prueba arriba o envía un POST desde tu nodo BTCPay.
-                  </p>
-                ) : (
-                  <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                    {webhookEvents.map(ev => (
-                      <div
-                        key={ev.id}
-                        className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
-                      >
-                        <div className="space-y-0.5 min-w-0">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="font-mono font-bold text-cyan-300">{ev.eventType}</span>
-                            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-950 text-slate-400 border border-slate-800">
-                              {ev.invoiceId}
-                            </span>
-                            {ev.signatureVerified && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                                HMAC OK
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[11px] text-slate-400 truncate">
-                            {ev.userEmail} · <strong className="text-amber-300">+{ev.coinsCredited} mo</strong> (${ev.amountUSD.toFixed(2)} USD)
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2 shrink-0">
-                          {ev.firestoreSynced ? (
-                            <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
-                              Firestore OK
-                            </span>
-                          ) : ev.blockchainConfirmed ? (
-                            <button
-                              type="button"
-                              disabled={!isVerifiedAdminGoogle}
-                              onClick={() => void syncSingleWebhookToFirestore(ev)}
-                              className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-bold text-[10px] transition"
-                            >
-                              {isVerifiedAdminGoogle ? 'Acreditar en Firestore' : 'Conecta Google'}
-                            </button>
-                          ) : (
-                            <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-400 text-[10px]">
-                              Sin confirmación final
+            {/* Backend SQLite Webhook Ledger */}
+            <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
+                  Libro Mayor de Webhooks BTCPay (SQLite + HMAC-SHA256)
+                </h4>
+                <span className="text-[11px] font-mono text-slate-400">{webhookEvents.length} eventos</span>
+              </div>
+              {webhookEvents.length === 0 ? (
+                <p className="text-xs text-slate-500 py-6 text-center">
+                  No hay webhooks recibidos aún. Dispara una prueba arriba o envía un POST desde tu nodo BTCPay.
+                </p>
+              ) : (
+                <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                  {webhookEvents.map(ev => (
+                    <div
+                      key={ev.id}
+                      className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-mono font-bold text-cyan-300">{ev.eventType}</span>
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-950 text-slate-400 border border-slate-800">
+                            {ev.invoiceId}
+                          </span>
+                          {ev.signatureVerified && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                              HMAC OK
                             </span>
                           )}
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold text-emerald-300 uppercase tracking-wider">
-                    Auditoría Firestore En Tiempo Real (/btcpay_webhooks)
-                  </h4>
-                  <span className="text-[11px] font-mono text-slate-400">
-                    {isVerifiedAdminGoogle ? `${firestoreWebhooks.length} confirmados` : 'Google requerido'}
-                  </span>
-                </div>
-                {!isVerifiedAdminGoogle ? (
-                  <div className="py-6 text-center space-y-2">
-                    <p className="text-xs text-slate-400">
-                      Conecta tu cuenta Google (<strong className="text-amber-300">{OWNER_EMAIL}</strong>) arriba para visualizar el libro mayor en tiempo real y ejecutar transacciones atómicas en Firestore.
-                    </p>
-                  </div>
-                ) : firestoreWebhooks.length === 0 ? (
-                  <p className="text-xs text-slate-500 py-6 text-center">
-                    Colección <code>/btcpay_webhooks</code> lista y escuchando confirmaciones on-chain.
-                  </p>
-                ) : (
-                  <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                    {firestoreWebhooks.map(fw => (
-                      <div
-                        key={fw.eventId}
-                        className="p-3 rounded-xl bg-slate-900/90 border border-emerald-500/20 flex items-center justify-between gap-2 text-xs"
-                      >
-                        <div className="space-y-0.5 min-w-0">
-                          <div className="font-mono text-emerald-300 font-bold truncate">
-                            {fw.invoiceId} · {fw.eventType}
-                          </div>
-                          <div className="text-[11px] text-slate-400 truncate">
-                            {fw.userEmail} · +{fw.coinsCredited} mo (${fw.amountUSD.toFixed(2)} USD)
-                          </div>
+                        <div className="text-[11px] text-slate-400 truncate">
+                          {ev.userEmail} · <strong className="text-amber-300">+{ev.coinsCredited} mo</strong> (${ev.amountUSD.toFixed(2)} USD)
                         </div>
-                        <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold shrink-0">
-                          {fw.status}
-                        </span>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {ev.blockchainConfirmed ? (
+                          <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                            Acreditado en SQLite
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-400 text-[10px]">
+                            Sin confirmación final
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ) : (
@@ -2054,7 +1831,7 @@ export const VaultConfigPanel: React.FC = () => {
                 vaultApis,
                 vaultApiFlags,
                 payoutConfig,
-                isFirestoreConnected: isVerifiedAdminGoogle,
+                isFirestoreConnected: true,
                 webhookPendingSyncCount: webhookEvents.filter(e => e.blockchainConfirmed && !e.firestoreSynced).length,
                 economyConfig: {
                   vaultRetentionPct: vaultRetentionRate,
@@ -2102,15 +1879,6 @@ export const VaultConfigPanel: React.FC = () => {
                     <span className="text-[11px] text-cyan-300 font-medium">
                       Paso siguiente: {rec.actionHint}
                     </span>
-                    {rec.id === 'rec_firestore_sync' && !isVerifiedAdminGoogle && (
-                      <button
-                        type="button"
-                        onClick={() => void handleConnectGoogleFirestore()}
-                        className="px-2.5 py-1 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-[10px] transition"
-                      >
-                        Conectar Google
-                      </button>
-                    )}
                     {(rec.id === 'rec_btcpay_webhook' || rec.id === 'rec_virtual_cards' || rec.id === 'rec_paypal_rest_api') && (
                       <button
                         type="button"

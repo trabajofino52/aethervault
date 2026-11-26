@@ -22,7 +22,10 @@ import {
   UserPlus,
   LogIn,
   Coins,
-  User
+  User,
+  Wallet,
+  CreditCard,
+  Database
 } from 'lucide-react';
 import { soundFx } from '../utils/audio';
 
@@ -42,6 +45,10 @@ export const AuthModal: React.FC = () => {
     authModalMode,
     setAuthModalMode,
     userEmail,
+    username,
+    preferredPayoutMethod,
+    preferredPayoutAddress,
+    updatePayoutPreference,
     authToken,
     coins,
     isOwner,
@@ -63,12 +70,21 @@ export const AuthModal: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
 
   // Register form state
+  const [regUsername, setRegUsername] = useState('');
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
+  const [regPayoutMethod, setRegPayoutMethod] = useState<'USDT' | 'PAYPAL'>('USDT');
+  const [regPayoutAddress, setRegPayoutAddress] = useState('');
   const [showRegPassword, setShowRegPassword] = useState(false);
   const [openStoreOnSuccess, setOpenStoreOnSuccess] = useState(true);
+
+  // Inline preferred payout editor (for signed-in user)
+  const [editPayoutMethod, setEditPayoutMethod] = useState<'USDT' | 'PAYPAL'>(preferredPayoutMethod);
+  const [editPayoutAddress, setEditPayoutAddress] = useState<string>(preferredPayoutAddress);
+  const [isSavingPayoutPref, setIsSavingPayoutPref] = useState(false);
+  const [payoutPrefMsg, setPayoutPrefMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const [authError, setAuthError] = useState<string | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
@@ -78,6 +94,9 @@ export const AuthModal: React.FC = () => {
   useEffect(() => {
     if (isAuthModalOpen) {
       setAuthError(null);
+      setPayoutPrefMsg(null);
+      setEditPayoutMethod(preferredPayoutMethod);
+      setEditPayoutAddress(preferredPayoutAddress);
       if (userEmail === 'jugador_anonimo@aethervault.com') {
         setInputEmail('');
       } else {
@@ -85,7 +104,7 @@ export const AuthModal: React.FC = () => {
       }
       setInputPassword('');
     }
-  }, [isAuthModalOpen, userEmail]);
+  }, [isAuthModalOpen, userEmail, preferredPayoutMethod, preferredPayoutAddress]);
 
   if (!isAuthModalOpen) return null;
 
@@ -190,6 +209,12 @@ export const AuthModal: React.FC = () => {
     e.preventDefault();
     setAuthError(null);
 
+    const cleanUsername = regUsername.trim();
+    if (cleanUsername && !/^[a-zA-Z0-9._-]{3,32}$/.test(cleanUsername)) {
+      setAuthError('El usuario debe tener entre 3 y 32 caracteres (letras, números, . _ -).');
+      return;
+    }
+
     const cleanEmail = regEmail.trim().toLowerCase();
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
     if (!cleanEmail || !emailRegex.test(cleanEmail)) {
@@ -205,11 +230,25 @@ export const AuthModal: React.FC = () => {
       return;
     }
 
+    const cleanPayoutAddress = regPayoutAddress.trim();
+    if (regPayoutMethod === 'PAYPAL') {
+      if (!emailRegex.test(cleanPayoutAddress)) {
+        setAuthError('Ingresa el correo válido de tu cuenta PayPal para pagos.');
+        return;
+      }
+    } else if (cleanPayoutAddress.length < 10 || /\s/.test(cleanPayoutAddress)) {
+      setAuthError('Ingresa una dirección USDT válida (mínimo 10 caracteres, sin espacios).');
+      return;
+    }
+
     setIsVerifying(true);
     const result = await registerUserWithEmail({
+      username: cleanUsername || undefined,
       email: cleanEmail,
       password: regPassword,
-      displayName: regName.trim()
+      displayName: regName.trim() || undefined,
+      preferredPayoutMethod: regPayoutMethod,
+      preferredPayoutAddress: cleanPayoutAddress
     });
     setIsVerifying(false);
 
@@ -218,14 +257,26 @@ export const AuthModal: React.FC = () => {
       return;
     }
 
+    setRegUsername('');
     setRegName('');
     setRegEmail('');
     setRegPassword('');
     setRegConfirmPassword('');
+    setRegPayoutAddress('');
     setIsAuthModalOpen(false);
     if (openStoreOnSuccess) {
       setIsStoreOpen(true);
     }
+  };
+
+  const handleSavePayoutPref = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingPayoutPref(true);
+    setPayoutPrefMsg(null);
+    const res = await updatePayoutPreference(editPayoutMethod, editPayoutAddress.trim());
+    setIsSavingPayoutPref(false);
+    setPayoutPrefMsg({ ok: res.ok, text: res.message });
+    if (res.ok) soundFx.playCoinChime();
   };
 
   const handleQuickLoginOwnerPreset = () => {
@@ -335,9 +386,14 @@ export const AuthModal: React.FC = () => {
               </span>
             </div>
             <div className="flex items-center justify-between gap-2">
-              <span className="font-mono text-xs text-slate-200 font-bold truncate">
-                {isGuestSession ? 'Invitado (Sin correo registrado)' : userEmail}
-              </span>
+              <div className="min-w-0">
+                <span className="font-mono text-xs text-slate-200 font-bold truncate block">
+                  {isGuestSession ? 'Invitado (Sin correo registrado)' : userEmail}
+                </span>
+                {username && !isGuestSession && (
+                  <span className="text-[10px] font-mono text-cyan-300">Usuario: @{username}</span>
+                )}
+              </div>
               {isOwner ? (
                 <span className="text-[11px] font-bold text-amber-400 bg-amber-950/80 border border-amber-600/50 px-2 py-0.5 rounded-md shrink-0 flex items-center gap-1">
                   <ShieldCheck className="w-3 h-3" />
@@ -370,11 +426,67 @@ export const AuthModal: React.FC = () => {
               )}
             </div>
 
+            {authToken && !isDemoAccount && (
+              <form onSubmit={handleSavePayoutPref} className="pt-2 mt-2 border-t border-slate-800/80 space-y-2">
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="uppercase tracking-wider font-bold text-emerald-300 flex items-center gap-1">
+                    <Database className="w-3 h-3" />
+                    Método de Cobro Guardado (SQLite)
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setEditPayoutMethod('USDT')}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                        editPayoutMethod === 'USDT'
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+                          : 'bg-slate-900 text-slate-400 border-slate-800'
+                      }`}
+                    >
+                      USDT
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditPayoutMethod('PAYPAL')}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                        editPayoutMethod === 'PAYPAL'
+                          ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50'
+                          : 'bg-slate-900 text-slate-400 border-slate-800'
+                      }`}
+                    >
+                      PAYPAL
+                    </button>
+                  </div>
+                </div>
+                <div className="flex gap-1.5">
+                  <input
+                    type={editPayoutMethod === 'PAYPAL' ? 'email' : 'text'}
+                    value={editPayoutAddress}
+                    onChange={e => setEditPayoutAddress(e.target.value)}
+                    placeholder={editPayoutMethod === 'USDT' ? 'Dirección USDT TRC-20...' : 'Correo PayPal...'}
+                    className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-emerald-400"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isSavingPayoutPref}
+                    className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold shrink-0 disabled:opacity-50"
+                  >
+                    {isSavingPayoutPref ? '...' : 'Guardar'}
+                  </button>
+                </div>
+                {payoutPrefMsg && (
+                  <p className={`text-[10px] ${payoutPrefMsg.ok ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {payoutPrefMsg.text}
+                  </p>
+                )}
+              </form>
+            )}
+
             <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
               <p className="text-[11px] text-slate-400 leading-relaxed flex-1">
                 {isOwner ? (
                   <span className="text-emerald-400">
-                    Acceso completo a Bóveda del Dueño, pasarelas USDT/PayPal y bitácora del servidor.
+                    Acceso completo a Bóveda del Dueño, pasarelas USDT/PayPal y bitácora SQLite.
                   </span>
                 ) : isDemoAccount || userEmail.endsWith('@vm.aethervault.local') ? (
                   <span className="text-purple-300">
@@ -382,11 +494,11 @@ export const AuthModal: React.FC = () => {
                   </span>
                 ) : isRegisteredEmailPlayer ? (
                   <span className="text-emerald-300">
-                    Tu cuenta por correo está conectada. Compra monedas en la Tienda para acreditarlas al instante.
+                    Tu cuenta está guardada en SQLite. Compra monedas en la Tienda para acreditarlas al instante.
                   </span>
                 ) : (
                   <span className="text-amber-300">
-                    Registra tu correo electrónico para guardar tu saldo y comprar monedas.
+                    Crea tu usuario para guardar tu saldo en SQLite y definir tu pago USDT o PayPal.
                   </span>
                 )}
               </p>
@@ -447,26 +559,49 @@ export const AuthModal: React.FC = () => {
           {authModalMode === 'REGISTER' ? (
             <form onSubmit={handleRegisterSubmit} className="space-y-3">
               <div className="p-3 rounded-xl bg-emerald-950/25 border border-emerald-500/30 text-[11px] text-emerald-200 leading-relaxed">
-                Crea tu cuenta personal con tu correo electrónico. Al registrarte podrás comprar tus paquetes de monedas por PayPal, tarjeta o USDT y conservar tu saldo entre sesiones.
+                Crea tu usuario en SQLite y elige tu método de cobro preferido (<strong>USDT</strong> o <strong>PayPal</strong>) para recibir tus retiros.
               </div>
 
-              <div>
-                <label className="text-[11px] uppercase tracking-wider text-slate-300 font-semibold block mb-1">
-                  Nombre o Alias (Opcional)
-                </label>
-                <div className="relative">
-                  <User className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
-                  <input
-                    type="text"
-                    value={regName}
-                    onChange={e => {
-                      setRegName(e.target.value);
-                      setAuthError(null);
-                    }}
-                    placeholder="Ej. Carlos Mendoza"
-                    maxLength={60}
-                    className="w-full min-h-[42px] bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-emerald-400"
-                  />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] uppercase tracking-wider text-slate-300 font-semibold block mb-1">
+                    Usuario (Login)
+                  </label>
+                  <div className="relative">
+                    <User className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                    <input
+                      type="text"
+                      value={regUsername}
+                      onChange={e => {
+                        setRegUsername(e.target.value);
+                        setAuthError(null);
+                      }}
+                      placeholder="Ej. carlos_vip"
+                      maxLength={32}
+                      autoComplete="username"
+                      className="w-full min-h-[42px] bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-emerald-400"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[11px] uppercase tracking-wider text-slate-300 font-semibold block mb-1">
+                    Nombre o Alias (Opcional)
+                  </label>
+                  <div className="relative">
+                    <User className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                    <input
+                      type="text"
+                      value={regName}
+                      onChange={e => {
+                        setRegName(e.target.value);
+                        setAuthError(null);
+                      }}
+                      placeholder="Ej. Carlos Mendoza"
+                      maxLength={60}
+                      className="w-full min-h-[42px] bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-emerald-400"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -545,6 +680,60 @@ export const AuthModal: React.FC = () => {
                 </div>
               </div>
 
+              {/* Preferred Payout Method Selector: USDT or PAYPAL */}
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+                <div className="text-[11px] uppercase tracking-wider text-emerald-300 font-bold">
+                  Método de Pago Preferido (USDT o PayPal) *
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRegPayoutMethod('USDT');
+                      setAuthError(null);
+                    }}
+                    className={`min-h-[40px] px-3 py-2 rounded-lg border text-xs font-bold flex items-center justify-center gap-1.5 transition ${
+                      regPayoutMethod === 'USDT'
+                        ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Wallet className="w-3.5 h-3.5" />
+                    <span>USDT (TRC-20)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRegPayoutMethod('PAYPAL');
+                      setAuthError(null);
+                    }}
+                    className={`min-h-[40px] px-3 py-2 rounded-lg border text-xs font-bold flex items-center justify-center gap-1.5 transition ${
+                      regPayoutMethod === 'PAYPAL'
+                        ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <CreditCard className="w-3.5 h-3.5" />
+                    <span>PayPal</span>
+                  </button>
+                </div>
+                <input
+                  type={regPayoutMethod === 'PAYPAL' ? 'email' : 'text'}
+                  required
+                  value={regPayoutAddress}
+                  onChange={e => {
+                    setRegPayoutAddress(e.target.value);
+                    setAuthError(null);
+                  }}
+                  placeholder={
+                    regPayoutMethod === 'USDT'
+                      ? 'Tu dirección USDT (ej. TQn9Y2khEsLJW1...)'
+                      : 'Tu correo de PayPal (ej. pagos@ejemplo.com)'
+                  }
+                  className="w-full min-h-[40px] bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-emerald-400"
+                />
+              </div>
+
               <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer select-none">
                 <input
                   type="checkbox"
@@ -572,116 +761,120 @@ export const AuthModal: React.FC = () => {
                 <Coins className="w-4 h-4" />
                 <span>
                   {isVerifying
-                    ? 'Registrando cuenta...'
+                    ? 'Creando usuario en SQLite...'
                     : openStoreOnSuccess
-                    ? 'Crear Cuenta y Comprar Monedas'
-                    : 'Registrar Cuenta por Correo'}
+                    ? 'Crear Usuario y Comprar Monedas'
+                    : 'Crear Usuario'}
                 </span>
               </button>
             </form>
           ) : (
             <div className="space-y-4">
-              {/* Quick preset switches */}
-              <div className="space-y-2">
-                <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block">
-                  Accesos Rápidos de Administración y Pruebas
-                </span>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  {/* Owner Preset */}
-                  <button
-                    type="button"
-                    onClick={handleQuickLoginOwnerPreset}
-                    className={`min-h-[48px] p-2.5 rounded-xl border text-left text-xs transition-colors flex items-center justify-between ${
-                      isOwnerTarget
-                        ? 'bg-amber-500/10 border-amber-500/50 text-amber-300 font-bold'
-                        : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-                    }`}
-                  >
-                    <div>
-                      <div className="font-bold flex items-center gap-1">
-                        <span>👑 Dueño (Clave)</span>
-                      </div>
-                      <div className="text-[10px] text-slate-400 truncate max-w-[115px] font-mono">{OWNER_EMAIL}</div>
-                    </div>
-                    {isOwnerTarget && <CheckCircle2 className="w-4 h-4 text-amber-400 shrink-0" />}
-                  </button>
+              {/* Quick preset switches & VM Testers — STRICTLY hidden unless Owner (trabajofino52@gmail.com) is authenticated */}
+              {isOwner && (
+                <>
+                  <div className="space-y-2">
+                    <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block">
+                      Accesos Rápidos de Administración y Pruebas (Solo Dueño)
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      {/* Owner Preset */}
+                      <button
+                        type="button"
+                        onClick={handleQuickLoginOwnerPreset}
+                        className={`min-h-[48px] p-2.5 rounded-xl border text-left text-xs transition-colors flex items-center justify-between ${
+                          isOwnerTarget
+                            ? 'bg-amber-500/10 border-amber-500/50 text-amber-300 font-bold'
+                            : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <div>
+                          <div className="font-bold flex items-center gap-1">
+                            <span>👑 Dueño (Clave)</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 truncate max-w-[115px] font-mono">{OWNER_EMAIL}</div>
+                        </div>
+                        {isOwnerTarget && <CheckCircle2 className="w-4 h-4 text-amber-400 shrink-0" />}
+                      </button>
 
-                  {/* Demo Account Preset */}
-                  <button
-                    type="button"
-                    onClick={handleQuickLoginDemoPreset}
-                    className={`min-h-[48px] p-2.5 rounded-xl border text-left text-xs transition-colors flex items-center justify-between ${
-                      isDemoTarget
-                        ? 'bg-purple-500/20 border-purple-500/70 text-purple-200 font-bold shadow-lg shadow-purple-500/10'
-                        : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-purple-500/40'
-                    }`}
-                  >
-                    <div>
-                      <div className="font-bold text-purple-300 flex items-center gap-1">
-                        <Sparkles className="w-3.5 h-3.5" />
-                        <span>🎮 Demo $5,000</span>
-                      </div>
-                      <div className="text-[10px] text-purple-400/80 truncate max-w-[110px] font-mono">{DEMO_USERNAME}</div>
-                    </div>
-                    {isDemoTarget && <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0" />}
-                  </button>
+                      {/* Demo Account Preset */}
+                      <button
+                        type="button"
+                        onClick={handleQuickLoginDemoPreset}
+                        className={`min-h-[48px] p-2.5 rounded-xl border text-left text-xs transition-colors flex items-center justify-between ${
+                          isDemoTarget
+                            ? 'bg-purple-500/20 border-purple-500/70 text-purple-200 font-bold shadow-lg shadow-purple-500/10'
+                            : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-purple-500/40'
+                        }`}
+                      >
+                        <div>
+                          <div className="font-bold text-purple-300 flex items-center gap-1">
+                            <Sparkles className="w-3.5 h-3.5" />
+                            <span>🎮 Demo $5,000</span>
+                          </div>
+                          <div className="text-[10px] text-purple-400/80 truncate max-w-[110px] font-mono">{DEMO_USERNAME}</div>
+                        </div>
+                        {isDemoTarget && <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0" />}
+                      </button>
 
-                  {/* Legacy Player Preset */}
-                  <button
-                    type="button"
-                    onClick={handleQuickLoginPlayerPreset}
-                    className={`min-h-[48px] p-2.5 rounded-xl border text-left text-xs transition-colors flex items-center justify-between ${
-                      isLegacyPresetTarget
-                        ? 'bg-slate-800 border-slate-600 text-slate-100 font-bold'
-                        : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-                    }`}
-                  >
-                    <div>
-                      <div className="font-bold">👤 Cuenta Real</div>
-                      <div className="text-[10px] text-slate-400 truncate max-w-[110px] font-mono">jugador_real</div>
+                      {/* Legacy Player Preset */}
+                      <button
+                        type="button"
+                        onClick={handleQuickLoginPlayerPreset}
+                        className={`min-h-[48px] p-2.5 rounded-xl border text-left text-xs transition-colors flex items-center justify-between ${
+                          isLegacyPresetTarget
+                            ? 'bg-slate-800 border-slate-600 text-slate-100 font-bold'
+                            : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <div>
+                          <div className="font-bold">👤 Cuenta Real</div>
+                          <div className="text-[10px] text-slate-400 truncate max-w-[110px] font-mono">jugador_real</div>
+                        </div>
+                        {isLegacyPresetTarget && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+                      </button>
                     </div>
-                    {isLegacyPresetTarget && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
-                  </button>
-                </div>
-              </div>
+                  </div>
 
-              {/* VM 10-Tester Sandbox Quick Access */}
-              <div className="p-3 rounded-xl bg-cyan-950/20 border border-cyan-500/30 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
-                    <Users className="w-3.5 h-3.5" />
-                    Entorno Pruebas Virtual (Máx. 10 Usuarios)
-                  </span>
-                  <span className="text-[10px] font-mono text-slate-400">Clave: {VM_TESTER_DEFAULT_PASS}</span>
-                </div>
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <select
-                    value={selectedVmTester}
-                    onChange={e => handleSelectVmTesterPreset(e.target.value)}
-                    className="flex-1 min-h-[40px] bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-cyan-200 font-mono focus:outline-none focus:border-cyan-400"
-                  >
-                    {VM_TESTER_SLOTS.map(slot => (
-                      <option key={slot.alias} value={slot.alias}>
-                        {slot.label} ({slot.alias}) — $5,000 USD Prueba
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    disabled={isVerifying}
-                    onClick={handleQuickConnectVmTester}
-                    className="min-h-[40px] px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-black text-xs transition shrink-0"
-                  >
-                    Probar Juegos ({selectedVmTester})
-                  </button>
-                </div>
-              </div>
+                  {/* VM 10-Tester Sandbox Quick Access */}
+                  <div className="p-3 rounded-xl bg-cyan-950/20 border border-cyan-500/30 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
+                        <Users className="w-3.5 h-3.5" />
+                        Entorno Pruebas Virtual (Máx. 10 Usuarios)
+                      </span>
+                      <span className="text-[10px] font-mono text-slate-400">Clave: {VM_TESTER_DEFAULT_PASS}</span>
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <select
+                        value={selectedVmTester}
+                        onChange={e => handleSelectVmTesterPreset(e.target.value)}
+                        className="flex-1 min-h-[40px] bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-cyan-200 font-mono focus:outline-none focus:border-cyan-400"
+                      >
+                        {VM_TESTER_SLOTS.map(slot => (
+                          <option key={slot.alias} value={slot.alias}>
+                            {slot.label} ({slot.alias}) — $5,000 USD Prueba
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        disabled={isVerifying}
+                        onClick={handleQuickConnectVmTester}
+                        className="min-h-[40px] px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-black text-xs transition shrink-0"
+                      >
+                        Probar Juegos ({selectedVmTester})
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
 
               {/* Login Form */}
-              <form onSubmit={handleLoginSubmit} className="space-y-3 pt-2 border-t border-slate-800">
+              <form onSubmit={handleLoginSubmit} className={`space-y-3 ${isOwner ? 'pt-2 border-t border-slate-800' : ''}`}>
                 <div>
                   <label className="text-[10px] uppercase tracking-wider text-slate-400 font-medium block mb-1">
-                    Correo Electrónico o Usuario
+                    Usuario o Correo Electrónico
                   </label>
                   <div className="relative">
                     <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
@@ -692,7 +885,7 @@ export const AuthModal: React.FC = () => {
                         setInputEmail(e.target.value);
                         setAuthError(null);
                       }}
-                      placeholder="tucorreo@ejemplo.com o tester01"
+                      placeholder="tu_usuario o correo@ejemplo.com"
                       className="w-full min-h-[42px] bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-400"
                     />
                   </div>

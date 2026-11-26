@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
-import { GameProvider, useGame } from './context/GameContext';
+import React, { useState } from 'react';
+import { GameProvider, OWNER_EMAIL, useGame } from './context/GameContext';
 import { logVmExperience } from './utils/telemetry';
 import { Header } from './components/Header';
 import { PushNotificationToast } from './components/PushNotificationToast';
@@ -48,7 +48,17 @@ import {
   Gift,
   Share2,
   Landmark,
-  ArrowLeftRight
+  ArrowLeftRight,
+  Mail,
+  Eye,
+  EyeOff,
+  User,
+  UserPlus,
+  LogIn,
+  AlertTriangle,
+  Wallet,
+  CreditCard,
+  Database
 } from 'lucide-react';
 import { soundFx } from './utils/audio';
 
@@ -757,7 +767,7 @@ const MainContent: React.FC = () => {
               Arquitectura de Banco Digital & Neobanco
             </h2>
             <p className="text-xs text-slate-300 leading-relaxed max-w-md mx-auto">
-              La suite de pasarelas de pago y Banking-as-a-Service (BaaS) está reservada para el propietario (<strong className="text-amber-400 font-mono">trabajofino52@gmail.com</strong>).
+              La suite de pasarelas de pago y Banking-as-a-Service (BaaS) está reservada exclusivamente para el administrador autorizado.
             </p>
           </div>
           <button
@@ -767,7 +777,7 @@ const MainContent: React.FC = () => {
             }}
             className="w-full min-h-[44px] py-3 bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition-transform active:scale-95"
           >
-            Autenticar como Propietario (trabajofino52@gmail.com)
+            Autenticar Administrador
           </button>
         </div>
       );
@@ -784,7 +794,7 @@ const MainContent: React.FC = () => {
             Acceso Exclusivo: Bóveda del Dueño
           </h2>
           <p className="text-xs text-slate-300 leading-relaxed">
-            Esta sección administrativa únicamente es visible para <strong className="text-amber-400 font-mono">trabajofino52@gmail.com</strong>.
+            Esta sección administrativa únicamente es visible tras iniciar sesión con las credenciales de administrador autorizadas.
           </p>
           <div className="text-[11px] text-slate-500 font-mono">
             Sesión actual: {userEmail}
@@ -793,7 +803,7 @@ const MainContent: React.FC = () => {
             onClick={() => setIsAuthModalOpen(true)}
             className="w-full min-h-[44px] py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg transition-transform active:scale-95"
           >
-            Iniciar Sesión con trabajofino52@gmail.com
+            Iniciar Sesión como Administrador
           </button>
         </div>
       );
@@ -924,61 +934,617 @@ class TelemetryErrorBoundary extends React.Component<
   }
 }
 
+const PublicRegistrationGate: React.FC = () => {
+  const {
+    registerUserWithEmail,
+    loginUserWithCredentials,
+    loginOwnerWithKey,
+    setIsStoreOpen
+  } = useGame();
+
+  const [mode, setMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
+  const [regUsername, setRegUsername] = useState('');
+  const [regName, setRegName] = useState('');
+  const [regEmail, setRegEmail] = useState('');
+  const [regPassword, setRegPassword] = useState('');
+  const [regConfirm, setRegConfirm] = useState('');
+  const [regPayoutMethod, setRegPayoutMethod] = useState<'USDT' | 'PAYPAL'>('USDT');
+  const [regPayoutAddress, setRegPayoutAddress] = useState('');
+  const [loginIdentifier, setLoginIdentifier] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [showPass, setShowPass] = useState(false);
+  const [openStoreAfter, setOpenStoreAfter] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+
+    const cleanUsername = regUsername.trim();
+    if (cleanUsername && !/^[a-zA-Z0-9._-]{3,32}$/.test(cleanUsername)) {
+      setFormError('El usuario debe tener entre 3 y 32 caracteres (letras, números, . _ -).');
+      return;
+    }
+
+    const cleanEmail = regEmail.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+    if (!cleanEmail || !emailRegex.test(cleanEmail)) {
+      setFormError('Ingresa un correo electrónico válido (ej. jugador@correo.com).');
+      return;
+    }
+    if (regPassword.length < 6) {
+      setFormError('La contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+    if (regPassword !== regConfirm) {
+      setFormError('Las contraseñas no coinciden.');
+      return;
+    }
+
+    const cleanPayoutAddress = regPayoutAddress.trim();
+    if (regPayoutMethod === 'PAYPAL') {
+      if (!emailRegex.test(cleanPayoutAddress)) {
+        setFormError('Ingresa el correo válido de tu cuenta PayPal para recibir tus pagos.');
+        return;
+      }
+    } else {
+      if (cleanPayoutAddress.length < 10 || /\s/.test(cleanPayoutAddress)) {
+        setFormError('Ingresa una dirección de billetera USDT válida (mínimo 10 caracteres, sin espacios).');
+        return;
+      }
+    }
+
+    setIsSubmitting(true);
+    const res = await registerUserWithEmail({
+      username: cleanUsername || undefined,
+      email: cleanEmail,
+      password: regPassword,
+      displayName: regName.trim() || undefined,
+      preferredPayoutMethod: regPayoutMethod,
+      preferredPayoutAddress: cleanPayoutAddress
+    });
+    setIsSubmitting(false);
+    if (!res.ok) {
+      setFormError(res.error || 'No se pudo completar el registro.');
+      return;
+    }
+    if (openStoreAfter) {
+      setIsStoreOpen(true);
+    }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+    const cleanIdentifier = loginIdentifier.trim();
+    if (!cleanIdentifier) {
+      setFormError('Ingresa tu usuario o correo electrónico.');
+      return;
+    }
+    if (!loginPassword) {
+      setFormError('Ingresa tu contraseña.');
+      return;
+    }
+    setIsSubmitting(true);
+    if (cleanIdentifier.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
+      const ok = await loginOwnerWithKey(loginPassword);
+      setIsSubmitting(false);
+      if (!ok) {
+        setFormError('Credenciales inválidas o bloqueo temporal activo.');
+      }
+      return;
+    }
+    const res = await loginUserWithCredentials(cleanIdentifier, loginPassword);
+    setIsSubmitting(false);
+    if (!res.ok) {
+      setFormError(res.error || 'Usuario, correo o contraseña incorrectos.');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between font-sans selection:bg-amber-500 selection:text-slate-950">
+      <PushNotificationToast />
+
+      {/* Minimal Top Brand Bar (Zero exposed users) */}
+      <header className="border-b border-slate-800/80 bg-slate-950/95 px-6 py-4">
+        <div className="max-w-5xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-amber-500 to-amber-300 p-0.5 flex items-center justify-center shadow-lg shadow-amber-500/20">
+              <div className="w-full h-full bg-slate-950 rounded-[7px] flex items-center justify-center">
+                <Coins className="w-5 h-5 text-amber-400" />
+              </div>
+            </div>
+            <div>
+              <span className="text-lg font-bold tracking-tight text-slate-100 font-display">
+                Aether<span className="text-amber-400">Vault</span>
+              </span>
+              <p className="text-[11px] text-slate-400">Acceso Privado · Base de Datos SQLite Local</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <Database className="w-4 h-4 text-emerald-400" />
+            <span className="hidden sm:inline">SQLite Cifrado</span>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Login / Create User Card */}
+      <main className="flex-1 flex items-center justify-center p-4 sm:p-8">
+        <div className="w-full max-w-4xl grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+          {/* Left Pitch Panel */}
+          <div className="lg:col-span-5 rounded-3xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 border border-slate-800 p-6 sm:p-8 flex flex-col justify-between space-y-6">
+            <div className="space-y-4">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[11px] font-bold">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>Acceso Protegido SQLite</span>
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-100 font-display leading-tight">
+                Inicia Sesión o Crea tu Usuario
+              </h1>
+              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                Ingresa con tu usuario y contraseña para acceder a Ruleta Europea, Blackjack 21, Póker Video, Carrera de Perros y Carrera de Caballos. Si eres nuevo, crea tu cuenta y elige cómo quieres cobrar: <strong>USDT</strong> o <strong>PayPal</strong>.
+              </p>
+            </div>
+
+            <div className="space-y-2.5 pt-4 border-t border-slate-800 text-xs text-slate-300">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Elige tu método de cobro al crear usuario: USDT o PayPal</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Depósitos por PayPal, Tarjeta Visa/MC y USDT a Bóveda</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Cuentas aisladas en SQLite local sin exponer usuarios</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Form Panel */}
+          <div className="lg:col-span-7 rounded-3xl bg-slate-900 border border-slate-700/80 p-6 sm:p-8 shadow-2xl space-y-5">
+            {/* Tabs: Iniciar Sesión first, Crear Usuario second */}
+            <div className="grid grid-cols-2 gap-2 p-1 bg-slate-950 rounded-xl border border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('LOGIN');
+                  setFormError(null);
+                  soundFx.playClick();
+                }}
+                className={`min-h-[44px] rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-colors ${
+                  mode === 'LOGIN'
+                    ? 'bg-amber-500 text-slate-950 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-100'
+                }`}
+              >
+                <LogIn className="w-4 h-4" />
+                <span>Iniciar Sesión</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('REGISTER');
+                  setFormError(null);
+                  soundFx.playClick();
+                }}
+                className={`min-h-[44px] rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-colors ${
+                  mode === 'REGISTER'
+                    ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-100'
+                }`}
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>Crear Usuario</span>
+              </button>
+            </div>
+
+            {mode === 'LOGIN' ? (
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div>
+                  <label className="text-[11px] uppercase tracking-wider text-slate-300 font-semibold block mb-1">
+                    Usuario o Correo Electrónico *
+                  </label>
+                  <div className="relative">
+                    <User className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                    <input
+                      type="text"
+                      required
+                      value={loginIdentifier}
+                      onChange={e => {
+                        setLoginIdentifier(e.target.value);
+                        setFormError(null);
+                      }}
+                      autoComplete="username"
+                      placeholder="tu_usuario o correo@ejemplo.com"
+                      className="w-full min-h-[44px] bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[11px] uppercase tracking-wider text-slate-300 font-semibold block mb-1">
+                    Contraseña *
+                  </label>
+                  <div className="relative">
+                    <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                    <input
+                      type={showPass ? 'text' : 'password'}
+                      required
+                      value={loginPassword}
+                      onChange={e => {
+                        setLoginPassword(e.target.value);
+                        setFormError(null);
+                      }}
+                      autoComplete="current-password"
+                      placeholder="Ingresa tu contraseña..."
+                      className="w-full min-h-[44px] bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-9 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-amber-400"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPass(!showPass)}
+                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-200 p-1"
+                      aria-label="Mostrar contraseña"
+                    >
+                      {showPass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+
+                {formError && (
+                  <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/40 text-xs text-rose-300 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>{formError}</span>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="w-full min-h-[46px] py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-extrabold text-xs uppercase tracking-wider rounded-xl shadow-lg flex items-center justify-center gap-2 transition active:scale-[0.98] disabled:opacity-50"
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span>{isSubmitting ? 'Verificando acceso...' : 'Entrar a la Plataforma'}</span>
+                </button>
+
+                <div className="pt-2 text-center border-t border-slate-800/80">
+                  <span className="text-xs text-slate-400">¿Todavía no tienes cuenta? </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode('REGISTER');
+                      setFormError(null);
+                      soundFx.playClick();
+                    }}
+                    className="text-xs font-bold text-emerald-400 hover:text-emerald-300 underline"
+                  >
+                    Crear Usuario Nuevo (USDT / PayPal)
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleRegister} className="space-y-3.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] uppercase tracking-wider text-slate-300 font-semibold block mb-1">
+                      Usuario (Login)
+                    </label>
+                    <div className="relative">
+                      <User className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                      <input
+                        type="text"
+                        value={regUsername}
+                        onChange={e => {
+                          setRegUsername(e.target.value);
+                          setFormError(null);
+                        }}
+                        placeholder="ej. carlos_vip"
+                        maxLength={32}
+                        autoComplete="username"
+                        className="w-full min-h-[44px] bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-emerald-400"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] uppercase tracking-wider text-slate-300 font-semibold block mb-1">
+                      Nombre Visible (Opcional)
+                    </label>
+                    <div className="relative">
+                      <User className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                      <input
+                        type="text"
+                        value={regName}
+                        onChange={e => {
+                          setRegName(e.target.value);
+                          setFormError(null);
+                        }}
+                        placeholder="Ej. Carlos Mendoza"
+                        maxLength={60}
+                        className="w-full min-h-[44px] bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-emerald-400"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[11px] uppercase tracking-wider text-slate-300 font-semibold block mb-1">
+                    Correo Electrónico *
+                  </label>
+                  <div className="relative">
+                    <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                    <input
+                      type="email"
+                      required
+                      value={regEmail}
+                      onChange={e => {
+                        setRegEmail(e.target.value);
+                        setFormError(null);
+                      }}
+                      autoComplete="email"
+                      placeholder="tucorreo@ejemplo.com"
+                      className="w-full min-h-[44px] bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-emerald-400"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] uppercase tracking-wider text-slate-300 font-semibold block mb-1">
+                      Contraseña (mín. 6) *
+                    </label>
+                    <div className="relative">
+                      <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                      <input
+                        type={showPass ? 'text' : 'password'}
+                        required
+                        minLength={6}
+                        value={regPassword}
+                        onChange={e => {
+                          setRegPassword(e.target.value);
+                          setFormError(null);
+                        }}
+                        autoComplete="new-password"
+                        placeholder="••••••"
+                        className="w-full min-h-[44px] bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-9 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-emerald-400"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPass(!showPass)}
+                        className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-200 p-1"
+                        aria-label="Mostrar contraseña"
+                      >
+                        {showPass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] uppercase tracking-wider text-slate-300 font-semibold block mb-1">
+                      Confirmar Contraseña *
+                    </label>
+                    <div className="relative">
+                      <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                      <input
+                        type={showPass ? 'text' : 'password'}
+                        required
+                        minLength={6}
+                        value={regConfirm}
+                        onChange={e => {
+                          setRegConfirm(e.target.value);
+                          setFormError(null);
+                        }}
+                        autoComplete="new-password"
+                        placeholder="••••••"
+                        className="w-full min-h-[44px] bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-emerald-400"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Preferred Payout Method Selector: USDT or PAYPAL */}
+                <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] uppercase tracking-wider text-emerald-300 font-bold">
+                      ¿Cómo quieres que te paguen? *
+                    </span>
+                    <span className="text-[10px] text-slate-400">Guardado en SQLite</span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRegPayoutMethod('USDT');
+                        setFormError(null);
+                        soundFx.playClick();
+                      }}
+                      className={`min-h-[44px] p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 ${
+                        regPayoutMethod === 'USDT'
+                          ? 'bg-emerald-500/15 border-emerald-400 text-emerald-200 font-bold'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Wallet className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <div>
+                        <div className="text-xs font-bold">USDT (TRC-20)</div>
+                        <div className="text-[10px] text-slate-400 font-normal">Billetera Cripto</div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRegPayoutMethod('PAYPAL');
+                        setFormError(null);
+                        soundFx.playClick();
+                      }}
+                      className={`min-h-[44px] p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 ${
+                        regPayoutMethod === 'PAYPAL'
+                          ? 'bg-cyan-500/15 border-cyan-400 text-cyan-200 font-bold'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <CreditCard className="w-4 h-4 text-cyan-400 shrink-0" />
+                      <div>
+                        <div className="text-xs font-bold">PayPal</div>
+                        <div className="text-[10px] text-slate-400 font-normal">Correo PayPal</div>
+                      </div>
+                    </button>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-slate-300 font-semibold block mb-1">
+                      {regPayoutMethod === 'USDT'
+                        ? 'Tu Dirección USDT (TRC-20 / ERC-20) *'
+                        : 'Tu Correo de Cuenta PayPal *'}
+                    </label>
+                    <input
+                      type={regPayoutMethod === 'PAYPAL' ? 'email' : 'text'}
+                      required
+                      value={regPayoutAddress}
+                      onChange={e => {
+                        setRegPayoutAddress(e.target.value);
+                        setFormError(null);
+                      }}
+                      placeholder={
+                        regPayoutMethod === 'USDT'
+                          ? 'Ej. TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE'
+                          : 'Ej. pagos@tupaypal.com'
+                      }
+                      className="w-full min-h-[42px] bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:border-emerald-400"
+                    />
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={openStoreAfter}
+                    onChange={e => setOpenStoreAfter(e.target.checked)}
+                    className="w-4 h-4 accent-emerald-500 rounded"
+                  />
+                  <span className="text-xs text-slate-200 font-medium">
+                    Abrir la Tienda de Monedas al completar registro (PayPal, USDT o Tarjeta)
+                  </span>
+                </label>
+
+                {formError && (
+                  <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/40 text-xs text-rose-300 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>{formError}</span>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="w-full min-h-[46px] py-3 bg-gradient-to-r from-emerald-500 to-emerald-400 hover:from-emerald-400 hover:to-emerald-300 text-slate-950 font-extrabold text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-emerald-500/15 flex items-center justify-center gap-2 transition active:scale-[0.98] disabled:opacity-50"
+                >
+                  <Coins className="w-4 h-4" />
+                  <span>
+                    {isSubmitting
+                      ? 'Creando usuario en SQLite...'
+                      : openStoreAfter
+                      ? 'Crear Usuario y Comprar Monedas'
+                      : 'Crear Usuario'}
+                  </span>
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+      </main>
+
+      <footer className="border-t border-slate-800/80 py-5 px-6 text-xs text-slate-500 text-center">
+        AetherVault · SQLite Local & Pasarela Internacional (USDT / PayPal)
+      </footer>
+    </div>
+  );
+};
+
+const AppShell: React.FC = () => {
+  const { authToken, userEmail, isSessionChecking } = useGame();
+
+  if (isSessionChecking) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-300 flex items-center justify-center p-6">
+        <div className="text-center space-y-3">
+          <div className="w-10 h-10 mx-auto rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center">
+            <Coins className="w-5 h-5 text-amber-400 animate-spin" />
+          </div>
+          <p className="text-xs font-mono text-slate-400">Verificando sesión segura...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const isAuthenticatedUser = Boolean(authToken) && userEmail.toLowerCase() !== 'jugador_anonimo@aethervault.com';
+  if (!isAuthenticatedUser) {
+    return <PublicRegistrationGate />;
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-slate-950">
+      {/* Floating Real-Time Push Notification Toast */}
+      <PushNotificationToast />
+
+      {/* 3-Zone Top Bar */}
+      <Header />
+
+      {/* Real-Time Live Winning Marquee Ticker */}
+      <LiveWinningTicker />
+
+      {/* Demo Account Indicator Banner */}
+      <DemoAccountTopBanner />
+
+      {/* Main View Area */}
+      <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6">
+        <MainContent />
+      </main>
+
+      {/* Global Modals */}
+      <GlobalModalsContainer />
+
+      {/* Floating Quick Action Dock */}
+      <FloatingShortcutsDock />
+
+      {/* Clean Editorial Footer (§1.B) */}
+      <footer className="border-t border-slate-800/80 py-8 bg-slate-950/90 text-xs text-slate-500">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-slate-300 font-display">AETHERVAULT</span>
+            <span>·</span>
+            <span>Gestión de Monedas & Casino Provably-Fair</span>
+            <span>·</span>
+            <span>Cifrado E2EE 256-Bit</span>
+          </div>
+
+          <div className="flex items-center gap-4 text-slate-400">
+            <span className="flex items-center gap-1">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              Semillas SHA-256 Verificadas
+            </span>
+            <span>·</span>
+            <span className="flex items-center gap-1">
+              <Fingerprint className="w-3.5 h-3.5 text-cyan-400" />
+              WebAuthn Passkey
+            </span>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+};
+
 export default function App() {
   return (
     <TelemetryErrorBoundary>
       <GameProvider>
-        <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-slate-950">
-          
-          {/* Floating Real-Time Push Notification Toast */}
-          <PushNotificationToast />
-
-          {/* 3-Zone Top Bar */}
-          <Header />
-
-          {/* Real-Time Live Winning Marquee Ticker */}
-          <LiveWinningTicker />
-
-          {/* Demo Account Indicator Banner */}
-          <DemoAccountTopBanner />
-
-          {/* Main View Area */}
-          <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6">
-            <MainContent />
-          </main>
-
-          {/* Global Modals */}
-          <GlobalModalsContainer />
-
-          {/* Floating Quick Action Dock */}
-          <FloatingShortcutsDock />
-
-          {/* Clean Editorial Footer (§1.B) */}
-          <footer className="border-t border-slate-800/80 py-8 bg-slate-950/90 text-xs text-slate-500">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-slate-300 font-display">AETHERVAULT</span>
-                <span>·</span>
-                <span>Gestión de Monedas & Casino Provably-Fair</span>
-                <span>·</span>
-                <span>Cifrado E2EE 256-Bit</span>
-              </div>
-
-              <div className="flex items-center gap-4 text-slate-400">
-                <span className="flex items-center gap-1">
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                  Semillas SHA-256 Verificadas
-                </span>
-                <span>·</span>
-                <span className="flex items-center gap-1">
-                  <Fingerprint className="w-3.5 h-3.5 text-cyan-400" />
-                  WebAuthn Passkey
-                </span>
-              </div>
-            </div>
-          </footer>
-
-        </div>
+        <AppShell />
       </GameProvider>
     </TelemetryErrorBoundary>
   );

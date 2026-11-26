@@ -7,6 +7,7 @@ import {
   getDb,
   OWNER_EMAIL,
   registerEmailUserInDb,
+  updateUserPayoutPreferenceInDb,
   getUserSessionProfileByEmail,
   authenticateUserInDb,
   changeUserPasswordInDb,
@@ -199,18 +200,32 @@ async function bootstrapServer() {
     });
   });
 
-  // Email Registration endpoint (New Player Account)
+  // Email / Username Registration endpoint (with preferred USDT or PAYPAL payout method in SQLite)
   app.post('/api/auth/register', authLimiter, (req, res) => {
     const ip = extractClientIp(req);
-    const body = req.body as { email?: string; password?: string; displayName?: string };
+    const body = req.body as {
+      username?: string;
+      email?: string;
+      password?: string;
+      displayName?: string;
+      preferredPayoutMethod?: 'USDT' | 'PAYPAL';
+      preferredPayoutAddress?: string;
+    };
+    const username = typeof body?.username === 'string' ? body.username.trim() : '';
     const email = typeof body?.email === 'string' ? body.email.trim() : '';
     const password = typeof body?.password === 'string' ? body.password : '';
     const displayName = typeof body?.displayName === 'string' ? body.displayName.trim() : '';
+    const preferredPayoutMethod = body?.preferredPayoutMethod === 'PAYPAL' ? 'PAYPAL' : 'USDT';
+    const preferredPayoutAddress =
+      typeof body?.preferredPayoutAddress === 'string' ? body.preferredPayoutAddress.trim() : '';
 
     const regResult = registerEmailUserInDb({
+      username,
       email,
       password,
       displayName,
+      preferredPayoutMethod,
+      preferredPayoutAddress,
       ipAddress: ip
     });
 
@@ -235,19 +250,50 @@ async function bootstrapServer() {
     });
   });
 
-  // Authentication endpoint (Owner, Demo, Standard Player)
+  // Update authenticated player's preferred payout method (USDT or PAYPAL) in SQLite
+  app.put('/api/auth/payout-preference', requireAuth, (req: AuthenticatedRequest, res) => {
+    const ip = req.clientIp || extractClientIp(req);
+    const actorEmail = req.sessionUser?.sub || '';
+    const body = (req.body || {}) as {
+      preferredPayoutMethod?: 'USDT' | 'PAYPAL';
+      preferredPayoutAddress?: string;
+    };
+    const result = updateUserPayoutPreferenceInDb({
+      actorEmail,
+      preferredPayoutMethod: body.preferredPayoutMethod === 'PAYPAL' ? 'PAYPAL' : 'USDT',
+      preferredPayoutAddress: typeof body.preferredPayoutAddress === 'string' ? body.preferredPayoutAddress : '',
+      ipAddress: ip
+    });
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.message });
+      return;
+    }
+    res.json({
+      ok: true,
+      message: result.message,
+      preferredPayoutMethod: result.preferredPayoutMethod,
+      preferredPayoutAddress: result.preferredPayoutAddress
+    });
+  });
+
+  // Authentication endpoint (Owner, Demo, Standard Player — accepts Username or Email)
   app.post('/api/auth/login', authLimiter, (req, res) => {
     const ip = extractClientIp(req);
-    const body = req.body as { email?: string; password?: string };
-    const email = typeof body?.email === 'string' ? body.email.trim() : '';
+    const body = req.body as { email?: string; username?: string; password?: string };
+    const identifier =
+      typeof body?.email === 'string' && body.email.trim()
+        ? body.email.trim()
+        : typeof body?.username === 'string'
+        ? body.username.trim()
+        : '';
     const password = typeof body?.password === 'string' ? body.password : '';
 
-    if (!email) {
-      res.status(400).json({ error: 'El correo o usuario es obligatorio.' });
+    if (!identifier) {
+      res.status(400).json({ error: 'El usuario o correo es obligatorio.' });
       return;
     }
 
-    const authResult = authenticateUserInDb(email, password, ip);
+    const authResult = authenticateUserInDb(identifier, password, ip);
     if (!authResult.ok || !authResult.user) {
       res.status(authResult.status).json({ error: authResult.message });
       return;
@@ -1124,8 +1170,9 @@ async function bootstrapServer() {
   // ============================================================================
   app.get('/api/players/directory', requireAuth, (req: AuthenticatedRequest, res) => {
     const actorEmail = req.sessionUser?.sub || '';
+    const isOwner = req.sessionUser?.role === 'OWNER' && actorEmail.toLowerCase() === OWNER_EMAIL.toLowerCase();
     res.json({
-      players: listDirectoryPlayersFromDb(actorEmail),
+      players: listDirectoryPlayersFromDb(actorEmail, isOwner),
       economyConfig: getEconomyConfigFromDb()
     });
   });

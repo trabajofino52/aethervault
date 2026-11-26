@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useGame } from '../context/GameContext';
 import {
   Coins,
@@ -22,6 +22,8 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
     requestPlayerRedemption,
     isDemoAccount,
     isRealAccountActive,
+    preferredPayoutMethod,
+    preferredPayoutAddress,
     setIsStoreOpen,
     setIsAuthModalOpen,
     setIsSupportPanelOpen,
@@ -29,10 +31,21 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
   } = useGame();
 
   const [amountCoins, setAmountCoins] = useState<string>('100');
-  const [destType, setDestType] = useState<'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire'>('crypto_usdt');
-  const [destAddress, setDestAddress] = useState<string>('');
+  const [destType, setDestType] = useState<'crypto_usdt' | 'crypto_monero' | 'crypto_btc' | 'paypal' | 'bank_wire'>(
+    preferredPayoutMethod === 'PAYPAL' ? 'paypal' : 'crypto_usdt'
+  );
+  const [destAddress, setDestAddress] = useState<string>(preferredPayoutAddress || '');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setDestType(preferredPayoutMethod === 'PAYPAL' ? 'paypal' : 'crypto_usdt');
+      if (preferredPayoutAddress) {
+        setDestAddress(preferredPayoutAddress);
+      }
+    }
+  }, [isOpen, preferredPayoutMethod, preferredPayoutAddress]);
 
   if (!isOpen) return null;
 
@@ -180,7 +193,7 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
             </p>
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-amber-300 flex items-center justify-center gap-1.5">
               <Clock className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>Pendiente de autorización por <strong>trabajofino52@gmail.com</strong></span>
+              <span>Pendiente de autorización por el <strong>Administrador de Bóveda</strong></span>
             </div>
           </div>
         ) : (
@@ -198,7 +211,7 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
                 </span>
               </div>
               <p className="text-[11px] text-slate-300 leading-relaxed">
-                Solo puedes retirar hasta el <strong>30%</strong> de tus {coins.toLocaleString()} monedas actuales (${(maxAllowed30PctCoins * 0.8).toFixed(2)} USD brutos). Cada solicitud requiere <strong>autorización explícita de trabajofino52@gmail.com</strong>.
+                Solo puedes retirar hasta el <strong>30%</strong> de tus {coins.toLocaleString()} monedas actuales (${(maxAllowed30PctCoins * 0.8).toFixed(2)} USD brutos). Cada solicitud requiere <strong>autorización manual del Administrador</strong>.
               </p>
             </div>
 
@@ -340,7 +353,7 @@ export const RedemptionModal: React.FC<{ isOpen: boolean; onClose: () => void }>
             <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-500/30 text-[11px] text-amber-200/90 flex items-start gap-2">
               <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
               <span>
-                <strong>Regla de Seguridad:</strong> Únicamente el Administrador (<strong>trabajofino52@gmail.com</strong>) tiene la potestad de autorizar y liberar el pago. Se cobrará en automático el {redemptionFeeRate}% de comisión directo a la Bóveda.
+                <strong>Regla de Seguridad:</strong> Únicamente el <strong>Administrador de Bóveda</strong> tiene la potestad de autorizar y liberar el pago. Se cobrará en automático el {redemptionFeeRate}% de comisión directo a la Bóveda.
               </span>
             </div>
 
